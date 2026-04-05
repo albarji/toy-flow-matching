@@ -231,7 +231,20 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
 
     return fig_traj
 
-def animate_trajectories(trajectories, x_range=(-10, 10), y_range=(-10, 10)):
+def animate_trajectories(trajectories, show_origins=False, target_data=None, x_range=(-10, 10), y_range=(-10, 10)):
+    """Generates an animation of the trajectories induced by the flow model as a line plot.
+    
+    Arguments:
+        trajectories: a list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model
+        show_origins: if True, the original source points (t=0) will be highlighted as a scatter plot in the background.
+        target_data: numpy array of shape (N, 2) representing the target distribution points the trajectories should aim to match (optional).
+            If provided, the target points will be visualized as a scatter plot in the background for comparison.
+        x_range: tuple specifying the range of x values for the plot.
+        y_range: tuple specifying the range of y values for the plot.
+        
+    Returns:
+        A Plotly Figure object visualizing the trajectories of points under the flow model.
+    """
     # Build trajectory array: shape (n_points, n_time, 2)
     traj_array = np.stack([[p for _, p in traj] for traj in trajectories])
     n_points, n_time, _ = traj_array.shape
@@ -249,8 +262,19 @@ def animate_trajectories(trajectories, x_range=(-10, 10), y_range=(-10, 10)):
     x0 = traj_array[:, 0, 0]
     y0 = traj_array[:, 0, 1]
 
-    fig_anim = go.Figure(
-        data=[
+    figure_data = []
+    if target_data is not None:
+        target_scatter = go.Scatter(
+            x=target_data[:, 0],
+            y=target_data[:, 1],
+            mode="markers",
+            name="Target Data",
+            marker=dict(color="orange", size=6, opacity=0.5),
+        )
+        figure_data.append(target_scatter)
+
+    figure_data.extend(
+        [
             go.Scatter(
                 x=[],
                 y=[],
@@ -269,19 +293,33 @@ def animate_trajectories(trajectories, x_range=(-10, 10), y_range=(-10, 10)):
         ]
     )
 
+    if show_origins:
+        origins_scatter = go.Scatter(
+            x=[traj[0][1][0] for traj in trajectories],
+            y=[traj[0][1][1] for traj in trajectories],
+            mode="markers",
+            name="Original (source) points",
+            marker=dict(color="blue", size=5, opacity=0.3),
+        )
+        figure_data.append(origins_scatter) 
+
+    fig_anim = go.Figure(data=figure_data)
+
     # Frames for t=1..end
     frames = []
     for k in range(1, n_time):
         x_hist, y_hist = build_history_lines(k)
-        frames.append(
-            go.Frame(
-                name=str(k),
-                data=[
-                    go.Scatter(x=x_hist, y=y_hist),
-                    go.Scatter(x=traj_array[:, k, 0], y=traj_array[:, k, 1]),
-                ],
-            )
-        )
+        figure_data = []
+        if target_data is not None:
+            figure_data.append(target_scatter)
+        figure_data.extend([
+            go.Scatter(x=x_hist, y=y_hist),
+            go.Scatter(x=traj_array[:, k, 0], y=traj_array[:, k, 1]),
+        ])
+        if show_origins:
+            figure_data.append(origins_scatter)
+
+        frames.append(go.Frame(name=str(k), data=figure_data))
 
     fig_anim.frames = frames
 
@@ -312,7 +350,7 @@ def animate_trajectories(trajectories, x_range=(-10, 10), y_range=(-10, 10)):
                 type="buttons",
                 showactive=False,
                 x=0.01,
-                y=1.00,
+                y=0.95,
                 xanchor="left",
                 yanchor="top",
                 buttons=[
@@ -322,7 +360,7 @@ def animate_trajectories(trajectories, x_range=(-10, 10), y_range=(-10, 10)):
                         args=[
                             None,
                             dict(
-                                frame=dict(duration=25, redraw=True),
+                                frame=dict(duration=10, redraw=True),
                                 transition=dict(duration=0),
                                 fromcurrent=True,
                                 mode="immediate",
