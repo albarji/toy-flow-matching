@@ -33,12 +33,11 @@ class FlowMLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
     
-def train_flow_model(source_data, target_data, num_updates=10000, batch_size=128, learning_rate=1e-3, verbose=False):
+def train_flow_model(couplings, num_epochs=200, batch_size=128, learning_rate=1e-3, verbose=False):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
     
     Arguments:
-        source_data: numpy array of shape (N, 2) representing the source distribution points
-        target_data: numpy array of shape (N, 2) representing the target distribution points
+        couplings: a list of tuples (src_point, tgt_point) representing the known couplings between source and target points.
         num_updates: the number of training updates to perform.
         batch_size: the number of point pairs to use in each training update.
         learning_rate: the learning rate for the optimizer.
@@ -47,49 +46,61 @@ def train_flow_model(source_data, target_data, num_updates=10000, batch_size=128
     Returns: the trained FlowMLP model.
     """
     # Prepare training tensors from existing couplings
-    src_tensor = torch.tensor(source_data, dtype=torch.float32)
-    tgt_tensor = torch.tensor(target_data, dtype=torch.float32)
+    src_tensor = torch.tensor([src for src, _ in couplings], dtype=torch.float32)
+    tgt_tensor = torch.tensor([tgt for _, tgt in couplings], dtype=torch.float32)
 
     # Instantiate model for 2D data
-    model = FlowMLP(input_output_dim=source_data.shape[1], hidden_dim=128, num_blocks=3)
+    model = FlowMLP(input_output_dim=src_tensor.shape[1], hidden_dim=128, num_blocks=3)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_updates)
+    scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_epochs)
     criterion = nn.MSELoss()
 
     # Train
     model.train()
-    ema_loss = 0.0
-    for update in range(num_updates):
-        # Create minibatch of independent couplings of source-target points
-        src_batch = src_tensor[np.random.randint(0, src_tensor.shape[0], size=batch_size), :]
-        tgt_batch = tgt_tensor[np.random.randint(0, tgt_tensor.shape[0], size=batch_size), :]
+    for epoch in range(num_epochs):
+        epoch_loss = 0.0
 
-        # Sample t ~ Uniform[0, 1] for each pair in minibatch
-        t = torch.rand(src_batch.shape[0], 1)
+        for i in range(0, src_tensor.shape[0], batch_size):
+            src_batch = src_tensor[i:i + batch_size]
+            tgt_batch = tgt_tensor[i:i + batch_size]
 
-        # Linear interpolation x_t = (1-t) * src + t * tgt
-        x_t = (1.0 - t) * src_batch + t * tgt_batch
+            # Sample t ~ Uniform[0, 1] for each pair in minibatch
+            t = torch.rand(src_batch.shape[0], 1)
 
-        # Target velocity vector: tgt - src
-        v_target = tgt_batch - src_batch
+            # Linear interpolation x_t = (1-t) * src + t * tgt
+            x_t = (1.0 - t) * src_batch + t * tgt_batch
 
-        # Predict and optimize
-        v_pred = model(x_t)
-        loss = criterion(v_pred, v_target)
+            # Target velocity vector: tgt - src
+            v_target = tgt_batch - src_batch
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # Predict and optimize
+            v_pred = model(x_t)
+            loss = criterion(v_pred, v_target)
 
-        ema_loss = 0.99 * ema_loss + 0.01 * loss.item()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        scheduler.step()
-        if (update + 1) % 1000 == 0 or update == 0:
-            if verbose:
-                print(f"Update {update + 1}/{num_updates} - EMA Loss: {ema_loss:.6f}, lr: {scheduler.get_last_lr()[0]:.6f}")
+            epoch_loss += loss.item() * src_batch.shape[0]
+        epoch_loss /= src_tensor.shape[0]
+        if (epoch + 1) % 20 == 0 or epoch == 0:
+            print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {epoch_loss:.6f}, LR: {scheduler.get_last_lr()[0]:.6f}")
 
     return model
+
+def sample_independent_couplings(source_data, target_data, num_couplings):
+    """Samples random independent couplings between source and target data points.
+    
+    Arguments:
+        source_data: numpy array of shape (N, 2) representing the source distribution points.
+        target_data: numpy array of shape (M, 2) representing the target distribution points.
+        num_couplings: the number of random couplings to sample.
+    Returns: a list of tuples (src_point, tgt_point) representing the sampled couplings.
+    """
+    src_indices = np.random.choice(source_data.shape[0], size=num_couplings, replace=True)
+    tgt_indices = np.random.choice(target_data.shape[0], size=num_couplings, replace=True)
+    return [(source_data[src_idx], target_data[tgt_idx]) for src_idx, tgt_idx in zip(src_indices, tgt_indices)]
 
 def estimate_velocities(model, points):
     """Helper function to estimate velocity vectors at given points using the trained model.

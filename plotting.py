@@ -12,7 +12,7 @@ def plot_distributions(source_data, target_data, couplings=None):
     Arguments:
         source_data: numpy array of shape (N, 2) representing the source distribution points
         target_data: numpy array of shape (N, 2) representing the target distribution points
-        couplings: optional list of tuples (int, int) representing the indices of the couplings between source and target points.
+        couplings: optional list of tuples (numpy array, numpy array) representing the couplings between source and target points.
             If provided, the couplings will be visualized as lines connecting the corresponding source and target points.
     Returns:
         A Plotly Figure object visualizing the source and target distributions.
@@ -41,9 +41,9 @@ def plot_distributions(source_data, target_data, couplings=None):
 
     if couplings is not None:
         x_lines, y_lines = [], []
-        for src_idx, tgt_idx in couplings:
-            x_lines.extend([source_data[src_idx, 0], target_data[tgt_idx, 0], None])
-            y_lines.extend([source_data[src_idx, 1], target_data[tgt_idx, 1], None])
+        for src_point, tgt_point in couplings:
+            x_lines.extend([src_point[0], tgt_point[0], None])
+            y_lines.extend([src_point[1], tgt_point[1], None])
         fig.add_trace(
             go.Scatter(
                 x=x_lines,
