@@ -95,8 +95,8 @@ def sample_independent_couplings(source_data, target_data, num_couplings):
     """Samples random independent couplings between source and target data points.
     
     Arguments:
-        source_data: numpy array of shape (N, 2) representing the source distribution points.
-        target_data: numpy array of shape (M, 2) representing the target distribution points.
+        source_data: numpy array of shape (N, d) representing the source distribution points.
+        target_data: numpy array of shape (M, d) representing the target distribution points.
         num_couplings: the number of random couplings to sample.
     Returns: a list of tuples (src_point, tgt_point) representing the sampled couplings.
     """
@@ -109,31 +109,31 @@ def estimate_velocities(model, points):
     
     Arguments:
         model: an already trained flow model.
-        points: numpy array of shape (N, 2) representing the points at which to estimate velocities.
+        points: numpy array of shape (N, d) representing the points at which to estimate velocities.
 
-    Returns: numpy array of shape (N, 2) representing the estimated velocity vectors.
+    Returns: numpy array of shape (N, d) representing the estimated velocity vectors.
     """
     model.eval()
     device = next(model.parameters()).device
     with torch.no_grad():
         return model(torch.tensor(points, dtype=torch.float32, device=device)).cpu().numpy()
 
-def euler_integrate(initial_point, velocity_fn, n_steps):
+def euler_integrate(initial_points, velocity_fn, n_steps):
     """
     Euler integration from t=0 to t=1.
 
     Arguments:
-        initial_point: array-like, shape (d,)
-        velocity_fn: callable(point) -> velocity
+        initial_points: array-like, shape (N, d), initial points at t=0
+        velocity_fn: callable(points) -> velocities, function that takes in an array of shape (N, d) and returns an array of shape (N, d) representing the velocity vectors
         n_steps: int, number of integration steps
     
     Returns:
-        List of (t, point) tuples, including t=0 and t=1.
+        List of (t+1, points) tuples, including t=0 and t=1.
     """
     if n_steps < 1:
         raise ValueError("n_steps must be >= 1")
 
-    x = np.asarray(initial_point, dtype=np.float32).copy()
+    x = np.asarray(initial_points, dtype=np.float32).copy()
     dt = 1.0 / n_steps
 
     path = [(0.0, x.copy())]
@@ -146,16 +146,25 @@ def euler_integrate(initial_point, velocity_fn, n_steps):
 
     return path
 
-def compute_trajectories(model, source_data, n_steps=50):
+def compute_trajectories(model, source_data, n_steps=50, batch_size=128):
     """Computes trajectories of points from the source distribution under the learned flow model.
 
     Arguments:
-        model: the trained flow model that takes in a tensor of shape (N, 2) and returns a tensor of shape (N, 2) representing the velocity vectors.
-        source_data: numpy array of shape (N, 2) representing the source distribution points
+        model: the trained flow model that takes in a tensor of shape (N, d) and returns a tensor of shape (N, d) representing the velocity vectors.
+        source_data: numpy array of shape (N, d) representing the source distribution points
         n_steps: the number of integration steps to use for computing trajectories.
             Fewer steps means faster but less accurate trajectories.
+        batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
 
     Returns:
         A list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
     """
-    return [euler_integrate(p, lambda x: estimate_velocities(model, x), n_steps) for p in source_data]
+    trajectories = []
+    for i in range(0, source_data.shape[0], batch_size):
+        batch_points = source_data[i:i + batch_size]
+        trajectories_batch = euler_integrate(batch_points, lambda x: estimate_velocities(model, x), n_steps)
+        ts, points = zip(*trajectories_batch)
+        for data_idx in range(len(batch_points)):
+            trajectories.append([(ts[t], points[t][data_idx]) for t in range(n_steps + 1)])
+
+    return trajectories
