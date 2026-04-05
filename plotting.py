@@ -328,3 +328,51 @@ def animate_trajectories(trajectories, x_range=(-10, 10), y_range=(-10, 10)):
     )
 
     return fig_anim
+
+
+def plot_generated_data_comparison(target_data, trajectories):
+    """Compares the original target data points with the end points of the trajectories induced by the flow model.
+    
+    Arguments:
+        target_data: numpy array of shape (N, 2) representing the original target distribution points
+        trajectories: a list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model
+        
+    Returns:
+        A Plotly Figure object visualizing the comparison between original target points and generated end points.
+    """
+    end_points = np.stack([traj[-1][1] for traj in trajectories])
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=target_data[:, 0],
+            y=target_data[:, 1],
+            mode="markers",
+            name="Original (target) points",
+            marker=dict(color="blue", size=6, opacity=0.7),
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=end_points[:, 0],
+            y=end_points[:, 1],
+            mode="markers",
+            name="Generated (end) points",
+            marker=dict(color="red", size=6, opacity=0.7),
+        )
+    )
+
+    fig.update_layout(
+        title="Comparison of Original Data Points and Generated Points",
+        width=600,
+        height=600,
+        xaxis=dict(title="X1", range=[-10, 10], constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", scaleanchor="x"),
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
+        margin=dict(l=0, r=0, t=30, b=0, pad=0),
+        template="plotly_white",
+    )
+
+    return fig
