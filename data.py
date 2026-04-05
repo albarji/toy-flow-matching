@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from sklearn.datasets import make_swiss_roll
+from sklearn.datasets import make_moons, make_swiss_roll
 
 def generate_two_gaussians(n=1000):
     """Generates a toy dataset consisting of two well-separated Gaussian clusters.
@@ -34,12 +34,24 @@ def generate_swiss_roll(n=1000):
     x = (x - x.mean()) / x.std()
     return x
 
+def generate_two_moons(n=1000):
+    """Generates a toy dataset in the shape of two interleaving moons.
+
+    Arguments:
+        n: number of data points to generate (default: 1000).
+    Returns:
+        A numpy array of shape (n, 2) containing the generated data points.
+    """
+    x, _ = make_moons(n_samples=n, noise=0.1)
+    x = (x - x.mean()) / x.std()
+    return x
+
 def generate_toy_data(dataset_type, n=1000):
     """Generates toy datasets for flow matching experiments.
 
     Arguments:
         n: number of data points to generate (default: 1000).
-        dataset_type: type of dataset to generate. Can be "two_gaussians" for two well-separated Gaussian clusters or "swiss_roll" for a 2D Swiss roll shape (default: "two_gaussians").
+        dataset_type: type of dataset to generate. Can be "two_gaussians" for two well-separated Gaussian clusters, "swiss_roll" for a 2D Swiss roll shape, or "two_moons" for two interleaving moons.
 
     Returns:
         A numpy array of shape (n, 2) containing the generated data points.
@@ -48,5 +60,7 @@ def generate_toy_data(dataset_type, n=1000):
         return generate_two_gaussians(n)
     elif dataset_type == "swiss_roll":
         return generate_swiss_roll(n)
+    elif dataset_type == "two_moons":
+        return generate_two_moons(n)
     else:
         raise ValueError(f"Unsupported dataset_type: {dataset_type}")
