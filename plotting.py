@@ -6,6 +6,13 @@ import plotly.graph_objects as go
 
 from models import estimate_velocities
 
+def data_ranges(*datasets, padding=1.0):
+    """Helper function to compute the overall data ranges for multiple datasets, with optional padding."""
+    all_data = np.vstack(datasets)
+    x_min, y_min = all_data.min(axis=0) - padding
+    x_max, y_max = all_data.max(axis=0) + padding
+    return (x_min, x_max), (y_min, y_max)
+
 def plot_distributions(source_data, target_data, couplings=None):
     """Creates a scatter plot comparing the source and target distributions.
     
@@ -55,12 +62,13 @@ def plot_distributions(source_data, target_data, couplings=None):
             )
         )
 
+    x_range, y_range = data_ranges(source_data, target_data)
     fig.update_layout(
         title="Source vs Target Distributions" + (f" (with couplings)" if couplings is not None else ""),
         width=600,
         height=600,
-        xaxis=dict(title="X1", range=[-10, 10], constrain="domain", fixedrange=True),
-        yaxis=dict(title="X2", scaleanchor="x"),
+        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
         margin=dict(l=0, r=0, t=30, b=0, pad=0),
         template="plotly_white",
@@ -68,7 +76,7 @@ def plot_distributions(source_data, target_data, couplings=None):
 
     return fig
 
-def plot_velocity_field(model, source_data, target_data, grid_size=25, x_range=(-10, 10), y_range=(-10, 10)):
+def plot_velocity_field(model, source_data, target_data, grid_size=25):
     """Visualizes the velocity field of the flow model as a quiver plot.
     
     Arguments:
@@ -76,16 +84,16 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, x_range=(
         source_data: numpy array of shape (N, 2) representing the source distribution points
         target_data: numpy array of shape (N, 2) representing the target distribution points
         grid_size: the number of points along each axis to create the grid for visualization.
-        x_range: tuple specifying the range of x values for the grid.
-        y_range: tuple specifying the range of y values for the grid.
     Returns:
         A Plotly Figure object visualizing the velocity field of the flow model.
     """
     # Evaluate learned velocity field on a 2D grid and visualize vectors
-    x_min, x_max = x_range
-    y_min, y_max = y_range
     n_grid = grid_size
     scale = 0.05  # arrow length scaling for visualization
+
+    x_range, y_range = data_ranges(source_data, target_data)
+    x_min, x_max = x_range
+    y_min, y_max = y_range
 
     xg = np.linspace(x_min, x_max, n_grid)
     yg = np.linspace(y_min, y_max, n_grid)
@@ -139,8 +147,8 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, x_range=(
         title="Learned Velocity Field",
         width=600,
         height=600,
-        xaxis=dict(title="X1", range=[x_min, x_max], constrain="domain", fixedrange=True),
-        yaxis=dict(title="X2", scaleanchor="x"),
+        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
         margin=dict(l=0, r=0, t=30, b=0, pad=0),
         template="plotly_white",
@@ -218,12 +226,13 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
         )
     )
 
+    x_range, y_range = data_ranges(*[step[1] for traj in trajectories for step in traj])
     fig_traj.update_layout(
         title="Induced Trajectories from Source Points",
         width=600,
         height=600,
-        xaxis=dict(title="X1", range=[-10, 10], constrain="domain", fixedrange=True),
-        yaxis=dict(title="X2", scaleanchor="x"),
+        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
         margin=dict(l=0, r=0, t=35, b=0, pad=0),
         template="plotly_white",
@@ -231,7 +240,7 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
 
     return fig_traj
 
-def animate_trajectories(trajectories, show_origins=False, target_data=None, x_range=(-10, 10), y_range=(-10, 10)):
+def animate_trajectories(trajectories, show_origins=False, target_data=None):
     """Generates an animation of the trajectories induced by the flow model as a line plot.
     
     Arguments:
@@ -239,8 +248,6 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None, x_r
         show_origins: if True, the original source points (t=0) will be highlighted as a scatter plot in the background.
         target_data: numpy array of shape (N, 2) representing the target distribution points the trajectories should aim to match (optional).
             If provided, the target points will be visualized as a scatter plot in the background for comparison.
-        x_range: tuple specifying the range of x values for the plot.
-        y_range: tuple specifying the range of y values for the plot.
         
     Returns:
         A Plotly Figure object visualizing the trajectories of points under the flow model.
@@ -336,6 +343,7 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None, x_r
         for k in range(1, n_time)
     ]
 
+    x_range, y_range = data_ranges(*[step[1] for traj in trajectories for step in traj])
     fig_anim.update_layout(
         title="Animated Induced Trajectories",
         width=600,
@@ -417,12 +425,13 @@ def plot_generated_data_comparison(target_data, trajectories):
         )
     )
 
+    x_range, y_range = data_ranges(target_data, *[step[1] for traj in trajectories for step in traj])
     fig.update_layout(
         title="Comparison of Original Data Points and Generated Points",
         width=600,
         height=600,
-        xaxis=dict(title="X1", range=[-10, 10], constrain="domain", fixedrange=True),
-        yaxis=dict(title="X2", scaleanchor="x"),
+        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
         margin=dict(l=0, r=0, t=30, b=0, pad=0),
         template="plotly_white",
