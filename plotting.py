@@ -13,7 +13,7 @@ def data_ranges(*datasets, padding=1.0):
     x_max, y_max = all_data.max(axis=0) + padding
     return (x_min, x_max), (y_min, y_max)
 
-def plot_distributions(source_data, target_data, couplings=None, max_points=1000):
+def plot_distributions(source_data, target_data, couplings=None, max_points=1000, max_couplings=1000):
     """Creates a scatter plot comparing the source and target distributions.
     
     Arguments:
@@ -22,10 +22,15 @@ def plot_distributions(source_data, target_data, couplings=None, max_points=1000
         couplings: optional list of tuples (numpy array, numpy array) representing the couplings between source and target points.
             If provided, the couplings will be visualized as lines connecting the corresponding source and target points.
         max_points: maximum number of points to display from each dataset (for performance reasons)
+        max_couplings: maximum number of couplings to visualize (for performance reasons)
     Returns:
         A Plotly Figure object visualizing the source and target distributions.
     """
     fig = go.Figure()
+
+    if couplings is not None:
+        source_data = np.vstack([np.array([coupling[0] for coupling in couplings]), source_data])
+        target_data = np.vstack([np.array([coupling[1] for coupling in couplings]), target_data])
 
     fig.add_trace(
         go.Scatter(
@@ -49,7 +54,7 @@ def plot_distributions(source_data, target_data, couplings=None, max_points=1000
 
     if couplings is not None:
         x_lines, y_lines = [], []
-        for src_point, tgt_point in couplings:
+        for src_point, tgt_point in couplings[:max_couplings]:
             x_lines.extend([src_point[0], tgt_point[0], None])
             y_lines.extend([src_point[1], tgt_point[1], None])
         fig.add_trace(
