@@ -13,7 +13,7 @@ def data_ranges(*datasets, padding=1.0):
     x_max, y_max = all_data.max(axis=0) + padding
     return (x_min, x_max), (y_min, y_max)
 
-def plot_distributions(source_data, target_data, couplings=None):
+def plot_distributions(source_data, target_data, couplings=None, max_points=1000):
     """Creates a scatter plot comparing the source and target distributions.
     
     Arguments:
@@ -21,6 +21,7 @@ def plot_distributions(source_data, target_data, couplings=None):
         target_data: numpy array of shape (N, 2) representing the target distribution points
         couplings: optional list of tuples (numpy array, numpy array) representing the couplings between source and target points.
             If provided, the couplings will be visualized as lines connecting the corresponding source and target points.
+        max_points: maximum number of points to display from each dataset (for performance reasons)
     Returns:
         A Plotly Figure object visualizing the source and target distributions.
     """
@@ -28,8 +29,8 @@ def plot_distributions(source_data, target_data, couplings=None):
 
     fig.add_trace(
         go.Scatter(
-            x=source_data[:, 0],
-            y=source_data[:, 1],
+            x=source_data[:max_points, 0],
+            y=source_data[:max_points, 1],
             mode="markers",
             name="Source Data",
             marker=dict(color="blue", size=6, opacity=0.7),
@@ -38,8 +39,8 @@ def plot_distributions(source_data, target_data, couplings=None):
 
     fig.add_trace(
         go.Scatter(
-            x=target_data[:, 0],
-            y=target_data[:, 1],
+            x=target_data[:max_points, 0],
+            y=target_data[:max_points, 1],
             mode="markers",
             name="Target Data",
             marker=dict(color="orange", size=6, opacity=0.7),
@@ -76,7 +77,7 @@ def plot_distributions(source_data, target_data, couplings=None):
 
     return fig
 
-def plot_velocity_field(model, source_data, target_data, grid_size=25):
+def plot_velocity_field(model, source_data, target_data, grid_size=25, max_points=1000):
     """Visualizes the velocity field of the flow model as a quiver plot.
     
     Arguments:
@@ -84,6 +85,7 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25):
         source_data: numpy array of shape (N, 2) representing the source distribution points
         target_data: numpy array of shape (N, 2) representing the target distribution points
         grid_size: the number of points along each axis to create the grid for visualization.
+        max_points: maximum number of points to display from each dataset (for performance reasons)
     Returns:
         A Plotly Figure object visualizing the velocity field of the flow model.
     """
@@ -122,8 +124,8 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25):
 
     fig_field.add_trace(
         go.Scatter(
-            x=source_data[:, 0],
-            y=source_data[:, 1],
+            x=source_data[:max_points, 0],
+            y=source_data[:max_points, 1],
             mode="markers",
             name="Source Data",
             marker=dict(color="blue", size=6, opacity=0.7),
@@ -132,8 +134,8 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25):
 
     fig_field.add_trace(
         go.Scatter(
-            x=target_data[:, 0],
-            y=target_data[:, 1],
+            x=target_data[:max_points, 0],
+            y=target_data[:max_points, 1],
             mode="markers",
             name="Target Data",
             marker=dict(color="orange", size=6, opacity=0.7),
@@ -156,7 +158,7 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25):
 
     return fig_field
 
-def plot_trajectories(trajectories, show_origins=False, target_data=None):
+def plot_trajectories(trajectories, show_origins=False, target_data=None, max_points=1000, max_trajectories=1000):
     """Visualizes the trajectories induced by the flow model as a line plot.
     
     Arguments:
@@ -164,13 +166,15 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
         show_origins: if True, the original source points (t=0) will be highlighted as a scatter plot in the background.
         target_data: numpy array of shape (N, 2) representing the target distribution points the trajectories should aim to match (optional).
             If provided, the target points will be visualized as a scatter plot in the background for comparison.
+        max_points: maximum number of points to display from the target dataset (for performance reasons)
+        max_trajectories: maximum number of trajectories to visualize (for performance reasons)
         
     Returns:
         A Plotly Figure object visualizing the trajectories of points under the flow model.
     """
     # Convert trajectories to Plotly line format
     x_traj_lines, y_traj_lines = [], []
-    for traj in trajectories:
+    for traj in trajectories[:max_trajectories]:
         for _, p in traj:
             x_traj_lines.append(p[0])
             y_traj_lines.append(p[1])
@@ -178,7 +182,7 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
         y_traj_lines.append(None)
 
     # Collect trajectory end points
-    end_points = np.stack([traj[-1][1] for traj in trajectories])
+    end_points = np.stack([traj[-1][1] for traj in trajectories[:max_trajectories]])
 
     # Plot: original points + trajectories + end points
     fig_traj = go.Figure()
@@ -186,8 +190,8 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
     if target_data is not None:
         fig_traj.add_trace(
             go.Scatter(
-                x=target_data[:, 0],
-                y=target_data[:, 1],
+                x=target_data[:max_points, 0],
+                y=target_data[:max_points, 1],
                 mode="markers",
                 name="Target Data",
                 marker=dict(color="orange", size=6, opacity=0.5),
@@ -197,8 +201,8 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
     if show_origins:
         fig_traj.add_trace(
             go.Scatter(
-                x=[traj[0][1][0] for traj in trajectories],
-                y=[traj[0][1][1] for traj in trajectories],
+                x=[traj[0][1][0] for traj in trajectories[:max_trajectories]],
+                y=[traj[0][1][1] for traj in trajectories[:max_trajectories]],
                 mode="markers",
                 name="Original (source) points",
             marker=dict(color="blue", size=5, opacity=0.3),
@@ -240,7 +244,7 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None):
 
     return fig_traj
 
-def animate_trajectories(trajectories, show_origins=False, target_data=None):
+def animate_trajectories(trajectories, show_origins=False, target_data=None, max_points=1000,max_trajectories=1000):
     """Generates an animation of the trajectories induced by the flow model as a line plot.
     
     Arguments:
@@ -248,12 +252,14 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None):
         show_origins: if True, the original source points (t=0) will be highlighted as a scatter plot in the background.
         target_data: numpy array of shape (N, 2) representing the target distribution points the trajectories should aim to match (optional).
             If provided, the target points will be visualized as a scatter plot in the background for comparison.
+        max_points: maximum number of points to display from the target dataset (for performance reasons)
+        max_trajectories: maximum number of trajectories to visualize (for performance reasons)
         
     Returns:
         A Plotly Figure object visualizing the trajectories of points under the flow model.
     """
     # Build trajectory array: shape (n_points, n_time, 2)
-    traj_array = np.stack([[p for _, p in traj] for traj in trajectories])
+    traj_array = np.stack([[p for _, p in traj] for traj in trajectories[:max_trajectories]])
     n_points, n_time, _ = traj_array.shape
 
     def build_history_lines(step_idx):
@@ -272,8 +278,8 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None):
     figure_data = []
     if target_data is not None:
         target_scatter = go.Scatter(
-            x=target_data[:, 0],
-            y=target_data[:, 1],
+            x=target_data[:max_points, 0],
+            y=target_data[:max_points, 1],
             mode="markers",
             name="Target Data",
             marker=dict(color="orange", size=6, opacity=0.5),
@@ -302,8 +308,8 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None):
 
     if show_origins:
         origins_scatter = go.Scatter(
-            x=[traj[0][1][0] for traj in trajectories],
-            y=[traj[0][1][1] for traj in trajectories],
+            x=[traj[0][1][0] for traj in trajectories[:max_trajectories]],
+            y=[traj[0][1][1] for traj in trajectories[:max_trajectories]],
             mode="markers",
             name="Original (source) points",
             marker=dict(color="blue", size=5, opacity=0.3),
@@ -391,24 +397,26 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None):
     return fig_anim
 
 
-def plot_generated_data_comparison(target_data, trajectories):
+def plot_generated_data_comparison(target_data, trajectories, max_points=1000, max_trajectories=1000):
     """Compares the original target data points with the end points of the trajectories induced by the flow model.
     
     Arguments:
         target_data: numpy array of shape (N, 2) representing the original target distribution points
         trajectories: a list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model
+        max_points: maximum number of points to display from the target dataset (for performance reasons)
+        max_trajectories: maximum number of trajectories to visualize (for performance reasons)
         
     Returns:
         A Plotly Figure object visualizing the comparison between original target points and generated end points.
     """
-    end_points = np.stack([traj[-1][1] for traj in trajectories])
+    end_points = np.stack([traj[-1][1] for traj in trajectories[:max_trajectories]])
 
     fig = go.Figure()
 
     fig.add_trace(
         go.Scatter(
-            x=target_data[:, 0],
-            y=target_data[:, 1],
+            x=target_data[:max_points, 0],
+            y=target_data[:max_points, 1],
             mode="markers",
             name="Original (target) points",
             marker=dict(color="blue", size=6, opacity=0.7),
@@ -417,15 +425,15 @@ def plot_generated_data_comparison(target_data, trajectories):
 
     fig.add_trace(
         go.Scatter(
-            x=end_points[:, 0],
-            y=end_points[:, 1],
+            x=end_points[:max_trajectories, 0],
+            y=end_points[:max_trajectories, 1],
             mode="markers",
             name="Generated (end) points",
             marker=dict(color="red", size=6, opacity=0.7),
         )
     )
 
-    x_range, y_range = data_ranges(target_data, *[step[1] for traj in trajectories for step in traj])
+    x_range, y_range = data_ranges(target_data, *[step[1] for traj in trajectories[:max_trajectories] for step in traj])
     fig.update_layout(
         title="Comparison of Original Data Points and Generated Points",
         width=600,
