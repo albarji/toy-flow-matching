@@ -148,11 +148,14 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, x_range=(
 
     return fig_field
 
-def plot_trajectories(trajectories):
+def plot_trajectories(trajectories, show_origins=False, target_data=None):
     """Visualizes the trajectories induced by the flow model as a line plot.
     
     Arguments:
         trajectories: a list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model
+        show_origins: if True, the original source points (t=0) will be highlighted as a scatter plot in the background.
+        target_data: numpy array of shape (N, 2) representing the target distribution points the trajectories should aim to match (optional).
+            If provided, the target points will be visualized as a scatter plot in the background for comparison.
         
     Returns:
         A Plotly Figure object visualizing the trajectories of points under the flow model.
@@ -172,13 +175,25 @@ def plot_trajectories(trajectories):
     # Plot: original points + trajectories + end points
     fig_traj = go.Figure()
 
-    fig_traj.add_trace(
-        go.Scatter(
-            x=[traj[0][1][0] for traj in trajectories],
-            y=[traj[0][1][1] for traj in trajectories],
-            mode="markers",
-            name="Original (source) points",
-            marker=dict(color="blue", size=5, opacity=0.7),
+    if target_data is not None:
+        fig_traj.add_trace(
+            go.Scatter(
+                x=target_data[:, 0],
+                y=target_data[:, 1],
+                mode="markers",
+                name="Target Data",
+                marker=dict(color="orange", size=6, opacity=0.5),
+            )
+        )
+
+    if show_origins:
+        fig_traj.add_trace(
+            go.Scatter(
+                x=[traj[0][1][0] for traj in trajectories],
+                y=[traj[0][1][1] for traj in trajectories],
+                mode="markers",
+                name="Original (source) points",
+            marker=dict(color="blue", size=5, opacity=0.3),
         )
     )
 
