@@ -1,0 +1,148 @@
+"""Module defining the flow model architecture, training loop and evaluation functions."""
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+class FlowMLP(nn.Module):
+    """A simple MLP architecture for modeling the velocity field in flow matching."""
+    def __init__(self, input_output_dim: int, hidden_dim: int, num_blocks: int):
+        """Initializes the FlowMLP model.
+
+        Args:
+            input_output_dim: The dimensionality of the input and output.
+            hidden_dim: The number of hidden units in each layer.
+            num_blocks: The number of hidden layers (blocks) in the network.
+        """
+        super().__init__()
+        if num_blocks < 1:
+            raise ValueError("num_blocks must be >= 1")
+
+        layers = []
+        in_dim = input_output_dim
+
+        for _ in range(num_blocks):
+            layers.append(nn.Linear(in_dim, hidden_dim))
+            layers.append(nn.ReLU())
+            in_dim = hidden_dim
+
+        layers.append(nn.Linear(hidden_dim, input_output_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+    
+def train_flow_model(source_data, target_data, num_updates=10000, batch_size=128, learning_rate=1e-3, verbose=False):
+    """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
+    
+    Arguments:
+        source_data: numpy array of shape (N, 2) representing the source distribution points
+        target_data: numpy array of shape (N, 2) representing the target distribution points
+        num_updates: the number of training updates to perform.
+        batch_size: the number of point pairs to use in each training update.
+        learning_rate: the learning rate for the optimizer.
+        verbose: whether to print training progress every 100 updates.
+
+    Returns: the trained FlowMLP model.
+    """
+    # Prepare training tensors from existing couplings
+    src_tensor = torch.tensor(source_data, dtype=torch.float32)
+    tgt_tensor = torch.tensor(target_data, dtype=torch.float32)
+
+    # Instantiate model for 2D data
+    model = FlowMLP(input_output_dim=source_data.shape[1], hidden_dim=128, num_blocks=3)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_updates)
+    criterion = nn.MSELoss()
+
+    # Train
+    model.train()
+    ema_loss = 0.0
+    for update in range(num_updates):
+        # Create minibatch of independent couplings of source-target points
+        src_batch = src_tensor[np.random.randint(0, src_tensor.shape[0], size=batch_size), :]
+        tgt_batch = tgt_tensor[np.random.randint(0, tgt_tensor.shape[0], size=batch_size), :]
+
+        # Sample t ~ Uniform[0, 1] for each pair in minibatch
+        t = torch.rand(src_batch.shape[0], 1)
+
+        # Linear interpolation x_t = (1-t) * src + t * tgt
+        x_t = (1.0 - t) * src_batch + t * tgt_batch
+
+        # Target velocity vector: tgt - src
+        v_target = tgt_batch - src_batch
+
+        # Predict and optimize
+        v_pred = model(x_t)
+        loss = criterion(v_pred, v_target)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        ema_loss = 0.99 * ema_loss + 0.01 * loss.item()
+
+        scheduler.step()
+        if (update + 1) % 1000 == 0 or update == 0:
+            if verbose:
+                print(f"Update {update + 1}/{num_updates} - EMA Loss: {ema_loss:.6f}, lr: {scheduler.get_last_lr()[0]:.6f}")
+
+    return model
+
+def estimate_velocities(model, points):
+    """Helper function to estimate velocity vectors at given points using the trained model.
+    
+    Arguments:
+        model: an already trained flow model.
+        points: numpy array of shape (N, 2) representing the points at which to estimate velocities.
+
+    Returns: numpy array of shape (N, 2) representing the estimated velocity vectors.
+    """
+    model.eval()
+    device = next(model.parameters()).device
+    with torch.no_grad():
+        return model(torch.tensor(points, dtype=torch.float32, device=device)).cpu().numpy()
+
+def euler_integrate(initial_point, velocity_fn, n_steps):
+    """
+    Euler integration from t=0 to t=1.
+
+    Arguments:
+        initial_point: array-like, shape (d,)
+        velocity_fn: callable(point) -> velocity
+        n_steps: int, number of integration steps
+    
+    Returns:
+        List of (t, point) tuples, including t=0 and t=1.
+    """
+    if n_steps < 1:
+        raise ValueError("n_steps must be >= 1")
+
+    x = np.asarray(initial_point, dtype=np.float32).copy()
+    dt = 1.0 / n_steps
+
+    path = [(0.0, x.copy())]
+
+    for k in range(n_steps):
+        v = velocity_fn(x)
+        v = np.asarray(v, dtype=np.float32)
+        x = x + dt * v
+        path.append(((k + 1) * dt, x.copy()))
+
+    return path
+
+def compute_trajectories(model, source_data, n_steps=50):
+    """Computes trajectories of points from the source distribution under the learned flow model.
+
+    Arguments:
+        model: the trained flow model that takes in a tensor of shape (N, 2) and returns a tensor of shape (N, 2) representing the velocity vectors.
+        source_data: numpy array of shape (N, 2) representing the source distribution points
+        n_steps: the number of integration steps to use for computing trajectories.
+            Fewer steps means faster but less accurate trajectories.
+
+    Returns:
+        A list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
+    """
+    return [euler_integrate(p, lambda x: estimate_velocities(model, x), n_steps) for p in source_data]
