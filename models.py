@@ -83,6 +83,8 @@ def train_flow_model(couplings, num_epochs=200, batch_size=128, learning_rate=1e
             optimizer.step()
 
             epoch_loss += loss.item() * src_batch.shape[0]
+
+        scheduler.step()
         epoch_loss /= src_tensor.shape[0]
         if (epoch + 1) % 20 == 0 or epoch == 0:
             print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {epoch_loss:.6f}, LR: {scheduler.get_last_lr()[0]:.6f}")
