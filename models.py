@@ -33,7 +33,7 @@ class FlowMLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
     
-def train_flow_model(couplings, num_epochs=200, batch_size=128, learning_rate=1e-3, verbose=False):
+def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, verbose=False):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
     
     Arguments:
@@ -46,11 +46,14 @@ def train_flow_model(couplings, num_epochs=200, batch_size=128, learning_rate=1e
     Returns: the trained FlowMLP model.
     """
     # Prepare training tensors from existing couplings
-    src_tensor = torch.tensor([src for src, _ in couplings], dtype=torch.float32)
-    tgt_tensor = torch.tensor([tgt for _, tgt in couplings], dtype=torch.float32)
+    src_tensor = torch.tensor(np.array([src for src, _ in couplings], dtype=np.float32))
+    tgt_tensor = torch.tensor(np.array([tgt for _, tgt in couplings], dtype=np.float32))
 
     # Instantiate model for 2D data
-    model = FlowMLP(input_output_dim=src_tensor.shape[1], hidden_dim=128, num_blocks=3)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = FlowMLP(input_output_dim=src_tensor.shape[1], hidden_dim=128, num_blocks=3).to(device)
+    src_tensor = src_tensor.to(device)
+    tgt_tensor = tgt_tensor.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_epochs)
@@ -66,7 +69,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=128, learning_rate=1e
             tgt_batch = tgt_tensor[i:i + batch_size]
 
             # Sample t ~ Uniform[0, 1] for each pair in minibatch
-            t = torch.rand(src_batch.shape[0], 1)
+            t = torch.rand(src_batch.shape[0], 1).to(device)
 
             # Linear interpolation x_t = (1-t) * src + t * tgt
             x_t = (1.0 - t) * src_batch + t * tgt_batch
