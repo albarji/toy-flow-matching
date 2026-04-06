@@ -529,7 +529,7 @@ def plot_density_map(reversed_mesh_trajectories, target_data, source_pdf=None, m
     yg = np.unique(startpoints[:, 1])
     Z = np.array(pdf_estimate).reshape(len(yg), len(xg))
 
-    fig = go.Figure(data=go.Contour(z=Z, x=xg, y=yg, colorscale="Viridis", contours=dict(showlabels=True)))
+    fig = go.Figure(data=go.Contour(z=Z, x=xg, y=yg, colorscale=[ [0, "black"], [1, "white"] ], contours=dict(showlabels=True)))
 
     fig.add_trace(
         go.Scatter(
