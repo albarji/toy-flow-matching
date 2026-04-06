@@ -13,10 +13,12 @@ def generate_two_gaussians(n=1000):
     Returns:
         A numpy array of shape (n, 2) containing the generated data points.
     """
-    return np.vstack([
+    data = np.vstack([
         np.random.multivariate_normal([5, 5], np.array([[1, -0.75], [-0.75, 1]]), n // 2),
         np.random.multivariate_normal([-5, -5], np.array([[1, -0.75], [-0.75, 1]]), n // 2)
     ])
+    np.random.shuffle(data)
+    return data
 
 def generate_swiss_roll(n=1000):
     """Generates a toy dataset in the shape of a 2D Swiss roll.
