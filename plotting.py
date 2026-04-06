@@ -4,7 +4,8 @@ import numpy as np
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
 
-from models import estimate_velocities
+from models import compute_trajectories, estimate_velocities
+from scipy.stats import multivariate_normal
 
 def data_ranges(*datasets, padding=0.1):
     """Helper function to compute the overall data ranges for multiple datasets, with optional padding.
@@ -284,7 +285,8 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None, max
     Returns:
         A Plotly Figure object visualizing the trajectories of points under the flow model.
     """
-    target_data = target_data[:max_points]
+    if target_data is not None:
+        target_data = target_data[:max_points]
     trajectories = trajectories[:max_trajectories]
 
     # Build trajectory array: shape (n_points, n_time, 2)
@@ -472,6 +474,79 @@ def plot_generated_data_comparison(target_data, trajectories, max_points=1000, m
         xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
         yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
+        margin=dict(l=0, r=0, t=30, b=0, pad=0),
+        template="plotly_white",
+    )
+
+    return fig
+
+def mesh_from_data(data, grid_size=25, max_points=1000):
+    """Helper function to create a grid of points covering the range of the data for visualization purposes.
+    
+    Arguments:
+        data: numpy array of shape (N, 2) representing the data points to determine the range for the grid.
+        grid_size: the number of points along each axis to create the grid for visualization.
+        max_points: maximum number of points to consider from the data for determining the range (for performance reasons)
+
+    Returns:
+        A numpy array of shape (grid_size*grid_size, 2) representing the grid points covering the range of the data.
+    """
+    data = data[:max_points]
+    x_range, y_range = data_ranges(data)
+    x_min, x_max = x_range
+    y_min, y_max = y_range
+    xg = np.linspace(x_min, x_max, grid_size)
+    yg = np.linspace(y_min, y_max, grid_size)
+    X, Y = np.meshgrid(xg, yg)
+    grid_points = np.stack([X.ravel(), Y.ravel()], axis=1)
+    return grid_points
+
+def plot_density_map(reversed_mesh_trajectories, target_data, source_pdf=None, max_points=1000):
+    """Visualizes a map of region, coloured by the degree of anomaly as estimated by a reversed flow model.
+
+    Arguments:
+        model: the trained flow model.
+        target_data: numpy array of shape (N, 2) representing the original target distribution points
+        source_pdf: callable(points) -> pdf_values, function that takes in an array of shape (N, 2) and returns an array of shape (N,) representing the probability density under the source distribution at those points.
+        grid_size: the number of points along each axis to create the grid for visualization.
+        max_points: maximum number of points to display from the source dataset (for performance reasons)            
+
+    Returns:
+        A Plotly Figure object visualizing the outlier map.
+    """
+    target_data = target_data[:max_points]
+    x_range, y_range = data_ranges(target_data)
+    x_min, x_max = x_range
+    y_min, y_max = y_range
+
+    startpoints = np.stack([traj[0][1] for traj in reversed_mesh_trajectories])
+    endpoints = np.stack([traj[-1][1] for traj in reversed_mesh_trajectories])
+    if source_pdf is None:
+        source_pdf = lambda points: [multivariate_normal.pdf(point, mean=[0, 0], cov=np.eye(2)) for point in points]
+    pdf_estimate = source_pdf(endpoints)
+
+    xg = np.unique(startpoints[:, 0])
+    yg = np.unique(startpoints[:, 1])
+    Z = np.array(pdf_estimate).reshape(len(yg), len(xg))
+
+    fig = go.Figure(data=go.Contour(z=Z, x=xg, y=yg, colorscale="Viridis", contours=dict(showlabels=True)))
+
+    fig.add_trace(
+        go.Scatter(
+            x=target_data[:, 0],
+            y=target_data[:, 1],
+            mode="markers",
+            name="Target Data",
+            marker=dict(color="orange", size=6, opacity=0.7),
+        )
+    )
+
+    fig.update_layout(
+        title="Outlier Map (density estimate from reversed flow)",
+        width=600,
+        height=600,
+        xaxis=dict(title="X1", range=(x_min, x_max), constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=(y_min, y_max), scaleanchor="x"),
         margin=dict(l=0, r=0, t=30, b=0, pad=0),
         template="plotly_white",
     )
