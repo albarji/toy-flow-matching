@@ -150,7 +150,7 @@ def euler_integrate(initial_points, velocity_fn, n_steps):
 
     return path
 
-def compute_trajectories(model, source_data, n_steps=50, batch_size=128):
+def compute_trajectories(model, source_data, n_steps=50, batch_size=128, reverse=False):
     """Computes trajectories of points from the source distribution under the learned flow model.
 
     Arguments:
@@ -159,6 +159,7 @@ def compute_trajectories(model, source_data, n_steps=50, batch_size=128):
         n_steps: the number of integration steps to use for computing trajectories.
             Fewer steps means faster but less accurate trajectories.
         batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
+        reverse: if True, integrates backward from target to source instead of forward from source to target.
 
     Returns:
         A list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
@@ -166,7 +167,10 @@ def compute_trajectories(model, source_data, n_steps=50, batch_size=128):
     trajectories = []
     for i in range(0, source_data.shape[0], batch_size):
         batch_points = source_data[i:i + batch_size]
-        trajectories_batch = euler_integrate(batch_points, lambda x: estimate_velocities(model, x), n_steps)
+        if reverse:
+            trajectories_batch = euler_integrate(batch_points, lambda x: -estimate_velocities(model, x), n_steps)
+        else:
+            trajectories_batch = euler_integrate(batch_points, lambda x: estimate_velocities(model, x), n_steps)
         ts, points = zip(*trajectories_batch)
         for data_idx in range(len(batch_points)):
             trajectories.append([(ts[t], points[t][data_idx]) for t in range(n_steps + 1)])
