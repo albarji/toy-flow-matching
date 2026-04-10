@@ -66,3 +66,13 @@ def generate_toy_data(dataset_type, n=1000):
         return generate_two_moons(n)
     else:
         raise ValueError(f"Unsupported dataset_type: {dataset_type}")
+
+def load_banana():
+    """Loads the banana-shaped dataset from a CSV file.
+
+    Returns:
+        A numpy array of shape (n, 2) containing the data points from the banana dataset.
+        A numpy array of shape (n,) containing the class labels for the banana dataset.
+    """
+    data = np.loadtxt("datasets/banana.csv", delimiter=",")
+    return data[:, :2], data[:, 2].astype(int)
