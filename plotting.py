@@ -26,14 +26,18 @@ def data_ranges(*datasets, padding=0.1):
     y_max += padding * y_len
     return (x_min, x_max), (y_min, y_max)
 
-def plot_distributions(source_data, target_data, couplings=None, max_points=1000, max_couplings=1000):
+def plot_distributions(source_data, target_data, target_labels=None, couplings=None, max_points=1000, max_couplings=1000):
     """Creates a scatter plot comparing the source and target distributions.
     
     Arguments:
         source_data: numpy array of shape (N, 2) representing the source distribution points
         target_data: numpy array of shape (N, 2) representing the target distribution points
+        target_labels: optional numpy array of shape (N,) with integer class labels for the target data points.
+            If provided, target points will be colored by class instead of using a single color.
         couplings: optional list of tuples (numpy array, numpy array) representing the couplings between source and target points.
             If provided, the couplings will be visualized as lines connecting the corresponding source and target points.
+            If target_labels are provided, couplings should be a list of tuples (src_point, tgt_point, tgt_label) where tgt_label
+            is the class label of the target point for coloring the coupling lines.
         max_points: maximum number of points to display from each dataset (for performance reasons)
         max_couplings: maximum number of couplings to visualize (for performance reasons)
     Returns:
@@ -44,9 +48,15 @@ def plot_distributions(source_data, target_data, couplings=None, max_points=1000
     if couplings is not None:
         source_data = np.vstack([np.array([coupling[0] for coupling in couplings]), source_data])
         target_data = np.vstack([np.array([coupling[1] for coupling in couplings]), target_data])
+        if target_labels is not None:
+            target_labels = np.hstack([np.array([coupling[2] for coupling in couplings]), target_labels])
 
     source_data = source_data[:max_points]
     target_data = target_data[:max_points]
+    if target_labels is None:
+        target_labels = np.zeros(target_data.shape[0], dtype=int)
+    else:
+        target_labels = target_labels[:max_points]
 
     fig.add_trace(
         go.Scatter(
@@ -58,19 +68,25 @@ def plot_distributions(source_data, target_data, couplings=None, max_points=1000
         )
     )
 
-    fig.add_trace(
-        go.Scatter(
-            x=target_data[:, 0],
-            y=target_data[:, 1],
-            mode="markers",
-            name="Target Data",
-            marker=dict(color="orange", size=6, opacity=0.7),
+    unique_labels = np.unique(target_labels)
+    colors = ["orange", "green", "red", "purple", "brown", "pink", "cyan", "magenta", "yellow", "lime"]
+    for i, label in enumerate(unique_labels):
+        mask = target_labels == label
+        name = "Target Data" if len(unique_labels) == 1 else f"Target Class {label}"
+        fig.add_trace(
+            go.Scatter(
+                x=target_data[mask, 0],
+                y=target_data[mask, 1],
+                mode="markers",
+                name=name,
+                marker=dict(color=colors[i % len(colors)], size=6, opacity=0.7),
+            )
         )
-    )
 
     if couplings is not None:
         x_lines, y_lines = [], []
-        for src_point, tgt_point in couplings[:max_couplings]:
+        for coupling in couplings[:max_couplings]:
+            src_point, tgt_point = coupling[:2]
             x_lines.extend([src_point[0], tgt_point[0], None])
             y_lines.extend([src_point[1], tgt_point[1], None])
         fig.add_trace(
