@@ -50,11 +50,7 @@ class FlowMLP(nn.Module):
             label: Optional tensor of shape (N,) with integer class indices, or None.
         """
         if self.has_embedding:
-            if label is not None:
-                emb = self.embedding(label)
-            else:
-                # Use all-zeros embedding
-                emb = torch.zeros(x.shape[0], self.embedding_size, device=x.device, dtype=x.dtype)
+            emb = self.embedding(label)
             x = torch.cat([x, emb], dim=1)
         return self.net(x)
     
