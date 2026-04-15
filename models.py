@@ -74,11 +74,11 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
     Returns: the trained FlowMLP model.
     """
     # Prepare training tensors from existing couplings
-    src_tensor = torch.tensor(np.array([src for src, *_ in couplings], dtype=np.float32))
-    tgt_tensor = torch.tensor(np.array([tgt for _, tgt, _ in couplings], dtype=np.float32))
-    supervised = any(len(c) == 3 for c in couplings)
+    src_tensor = torch.tensor(np.array([coupling[0] for coupling in couplings], dtype=np.float32))
+    tgt_tensor = torch.tensor(np.array([coupling[1] for coupling in couplings], dtype=np.float32))
+    supervised = any(len(coupling) == 3 for coupling in couplings)
     if supervised:
-        raw_labels = [label for *_, label in couplings]
+        raw_labels = [coupling[2] for coupling in couplings]
         labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
         labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(raw_labels)))})
         num_labels = len(labels_dict)
@@ -95,7 +95,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
     ).to(device)
     src_tensor = src_tensor.to(device)
     tgt_tensor = tgt_tensor.to(device)
-    if labels is not None:
+    if supervised:
         labels = labels.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
