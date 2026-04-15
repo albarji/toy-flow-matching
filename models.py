@@ -5,22 +5,33 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+
 class FlowMLP(nn.Module):
-    """A simple MLP architecture for modeling the velocity field in flow matching."""
-    def __init__(self, input_output_dim: int, hidden_dim: int, num_blocks: int):
+    """A simple MLP architecture for modeling the velocity field in flow matching, with optional embedding layer."""
+    def __init__(self, input_output_dim: int, hidden_dim: int, num_blocks: int, embedding_size: int = None, num_embeddings: int = None):
         """Initializes the FlowMLP model.
 
         Args:
             input_output_dim: The dimensionality of the input and output.
             hidden_dim: The number of hidden units in each layer.
             num_blocks: The number of hidden layers (blocks) in the network.
+            embedding_size: Size of the embedding vector (if using embedding layer).
+            num_embeddings: Number of distinct elements for the embedding layer. If None, no embedding layer is used.
         """
         super().__init__()
         if num_blocks < 1:
             raise ValueError("num_blocks must be >= 1")
 
+        self.has_embedding = embedding_size is not None and num_embeddings is not None
+        self.embedding_size = embedding_size if self.has_embedding else 0
+
+        if self.has_embedding:
+            self.embedding = nn.Embedding(num_embeddings, embedding_size)
+        else:
+            self.embedding = None
+
         layers = []
-        in_dim = input_output_dim
+        in_dim = input_output_dim + (self.embedding_size if self.has_embedding else 0)
 
         for _ in range(num_blocks):
             layers.append(nn.Linear(in_dim, hidden_dim))
@@ -30,30 +41,62 @@ class FlowMLP(nn.Module):
         layers.append(nn.Linear(hidden_dim, input_output_dim))
         self.net = nn.Sequential(*layers)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, label: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass for the model.
+
+        Args:
+            x: Input tensor of shape (N, input_output_dim)
+            label: Optional tensor of shape (N,) with integer class indices, or None.
+        """
+        if self.has_embedding:
+            if label is not None:
+                emb = self.embedding(label)
+            else:
+                # Use all-zeros embedding
+                emb = torch.zeros(x.shape[0], self.embedding_size, device=x.device, dtype=x.dtype)
+            x = torch.cat([x, emb], dim=1)
         return self.net(x)
     
-def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, verbose=False):
+def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, verbose=False):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
     
     Arguments:
-        couplings: a list of tuples (src_point, tgt_point) representing the known couplings between source and target points.
-        num_updates: the number of training updates to perform.
+        couplings: a list of tuples (src_point, tgt_point) representing the known couplings between source and target points,
+            or a list of tuples (src_point, tgt_point, tgt_label) if using supervised labels.
+        num_epochs: the number of training epochs over the couplings to perform.
         batch_size: the number of point pairs to use in each training update.
         learning_rate: the learning rate for the optimizer.
+        embedding_size: the size of the embedding vector. Ignored if couplings do not contain labels.
+        labels_drop_rate: if labels are provided, the probability of dropping them during training to allow learning both a general flow and a label-conditioned flow. Should be between 0 and 1.
         verbose: whether to print training progress every 100 updates.
 
     Returns: the trained FlowMLP model.
     """
     # Prepare training tensors from existing couplings
-    src_tensor = torch.tensor(np.array([src for src, _ in couplings], dtype=np.float32))
-    tgt_tensor = torch.tensor(np.array([tgt for _, tgt in couplings], dtype=np.float32))
+    src_tensor = torch.tensor(np.array([src for src, *_ in couplings], dtype=np.float32))
+    tgt_tensor = torch.tensor(np.array([tgt for _, tgt, _ in couplings], dtype=np.float32))
+    supervised = any(len(c) == 3 for c in couplings)
+    if supervised:
+        raw_labels = [label for *_, label in couplings]
+        labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
+        labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(raw_labels)))})
+        num_labels = len(labels_dict)
+        labels = torch.tensor([labels_dict[label] for label in raw_labels], dtype=torch.int)
 
     # Instantiate model for 2D data
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FlowMLP(input_output_dim=src_tensor.shape[1], hidden_dim=128, num_blocks=3).to(device)
+    model = FlowMLP(
+        input_output_dim=src_tensor.shape[1],
+        hidden_dim=128,
+        num_blocks=3,
+        embedding_size=embedding_size if supervised else None,
+        num_embeddings=num_labels if supervised else None
+    ).to(device)
     src_tensor = src_tensor.to(device)
     tgt_tensor = tgt_tensor.to(device)
+    if labels is not None:
+        labels = labels.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_epochs)
@@ -67,6 +110,12 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
         for i in range(0, src_tensor.shape[0], batch_size):
             src_batch = src_tensor[i:i + batch_size]
             tgt_batch = tgt_tensor[i:i + batch_size]
+            labels_batch = labels[i:i + batch_size] if supervised else None
+
+            # Drop labels with probability labels_drop_rate
+            if supervised and labels_drop_rate > 0:
+                mask = torch.rand(labels_batch.shape[0], device=labels_batch.device) < labels_drop_rate
+                labels_batch[mask] = 0  # Use 0 special label 0 to indicate dropped labels
 
             # Sample t ~ Uniform[0, 1] for each pair in minibatch
             t = torch.rand(src_batch.shape[0], 1).to(device)
@@ -78,7 +127,8 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
             v_target = tgt_batch - src_batch
 
             # Predict and optimize
-            v_pred = model(x_t)
+            model_inputs = (x_t, labels_batch) if supervised else (x_t,)
+            v_pred = model(*model_inputs)
             loss = criterion(v_pred, v_target)
 
             optimizer.zero_grad()
@@ -95,18 +145,22 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
 
     return model
 
-def sample_independent_couplings(source_data, target_data, num_couplings):
+def sample_independent_couplings(source_data, target_data, num_couplings, target_labels=None):
     """Samples random independent couplings between source and target data points.
     
     Arguments:
         source_data: numpy array of shape (N, d) representing the source distribution points.
         target_data: numpy array of shape (M, d) representing the target distribution points.
         num_couplings: the number of random couplings to sample.
-    Returns: a list of tuples (src_point, tgt_point) representing the sampled couplings.
+        target_labels: optional numpy array of shape (M,) containing class labels for the target data points.
+    Returns: a list of tuples (src_point, tgt_point) representing the sampled couplings, or a list of tuples (src_point, tgt_point, tgt_label) if target_labels are provided.
     """
     src_indices = np.random.choice(source_data.shape[0], size=num_couplings, replace=True)
     tgt_indices = np.random.choice(target_data.shape[0], size=num_couplings, replace=True)
-    return [(source_data[src_idx], target_data[tgt_idx]) for src_idx, tgt_idx in zip(src_indices, tgt_indices)]
+    if target_labels is None:
+        return [(source_data[src_idx], target_data[tgt_idx]) for src_idx, tgt_idx in zip(src_indices, tgt_indices)]
+    else:
+        return [(source_data[src_idx], target_data[tgt_idx], target_labels[tgt_idx]) for src_idx, tgt_idx in zip(src_indices, tgt_indices)]
 
 def estimate_velocities(model, points):
     """Helper function to estimate velocity vectors at given points using the trained model.
