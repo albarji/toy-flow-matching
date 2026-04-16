@@ -41,6 +41,8 @@ class FlowMLP(nn.Module):
         layers.append(nn.Linear(hidden_dim, input_output_dim))
         self.net = nn.Sequential(*layers)
 
+        self.labels_dict = None  # Will be set during training if using supervised labels
+
     def forward(self, x: torch.Tensor, label: torch.Tensor = None) -> torch.Tensor:
         """
         Forward pass for the model.
@@ -50,9 +52,16 @@ class FlowMLP(nn.Module):
             label: Optional tensor of shape (N,) with integer class indices, or None.
         """
         if self.has_embedding:
+            if label is None:
+                label = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)  # Use 0 as special label for no label
             emb = self.embedding(label)
             x = torch.cat([x, emb], dim=1)
         return self.net(x)
+    
+def labels_dictionary(target_labels):
+    labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
+    labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
+    return labels_dict
     
 def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, verbose=False):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
@@ -75,8 +84,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
     supervised = any(len(coupling) == 3 for coupling in couplings)
     if supervised:
         raw_labels = [coupling[2] for coupling in couplings]
-        labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
-        labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(raw_labels)))})
+        labels_dict = labels_dictionary(raw_labels)
         num_labels = len(labels_dict)
         labels = torch.tensor([labels_dict[label] for label in raw_labels], dtype=torch.int)
 
@@ -93,6 +101,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
     tgt_tensor = tgt_tensor.to(device)
     if supervised:
         labels = labels.to(device)
+        model.labels_dict = labels_dict  # Store the labels dictionary in the model for later use
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_epochs)
@@ -158,19 +167,23 @@ def sample_independent_couplings(source_data, target_data, num_couplings, target
     else:
         return [(source_data[src_idx], target_data[tgt_idx], target_labels[tgt_idx]) for src_idx, tgt_idx in zip(src_indices, tgt_indices)]
 
-def estimate_velocities(model, points):
+def estimate_velocities(model, points, label=None):
     """Helper function to estimate velocity vectors at given points using the trained model.
     
     Arguments:
         model: an already trained flow model.
         points: numpy array of shape (N, d) representing the points at which to estimate velocities.
+        label: optional integer representing the label for which to estimate velocities (if the model is conditional).
 
     Returns: numpy array of shape (N, d) representing the estimated velocity vectors.
     """
     model.eval()
     device = next(model.parameters()).device
     with torch.no_grad():
-        return model(torch.tensor(points, dtype=torch.float32, device=device)).cpu().numpy()
+        modelargs = (torch.tensor(points, dtype=torch.float32, device=device),)
+        if label is not None:
+            modelargs += (torch.full((points.shape[0],), model.labels_dict[label], dtype=torch.long, device=device),)
+        return model(*modelargs).cpu().numpy()
 
 def euler_integrate(initial_points, velocity_fn, n_steps):
     """
