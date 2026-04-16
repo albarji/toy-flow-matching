@@ -4,21 +4,27 @@ import numpy as np
 
 from sklearn.datasets import make_moons, make_swiss_roll
 
-def generate_two_gaussians(n=1000):
+def generate_two_gaussians(n=1000, supervised=False):
     """Generates a toy dataset consisting of two well-separated Gaussian clusters.
 
     Arguments:
         n: total number of data points to generate (default: 1000). The dataset will consist of n/2 points from each Gaussian cluster.
+        supervised: whether to generate labels for the Gaussian clusters (default: False).
 
     Returns:
-        A numpy array of shape (n, 2) containing the generated data points.
+        If supervised is False, a numpy array of shape (n, 2) containing the generated data points.
+        If supervised is True, a tuple (data, labels) where data is a numpy array of shape (n, 2) and labels is a numpy array of shape (n,) containing the class labels.
     """
     data = np.vstack([
         np.random.multivariate_normal([5, 5], np.array([[1, -0.75], [-0.75, 1]]), n // 2),
         np.random.multivariate_normal([-5, -5], np.array([[1, -0.75], [-0.75, 1]]), n // 2)
     ])
-    np.random.shuffle(data)
-    return data
+    perm = np.random.permutation(n)
+    ret = (data[perm],)
+    if supervised:
+        labels = np.array([0] * (n // 2) + [1] * (n // 2))
+        ret += (labels[perm],)
+    return ret
 
 def generate_swiss_roll(n=1000):
     """Generates a toy dataset in the shape of a 2D Swiss roll.
@@ -60,6 +66,8 @@ def generate_toy_data(dataset_type, n=1000):
     """
     if dataset_type == "two_gaussians":
         return generate_two_gaussians(n)
+    elif dataset_type == "two_gaussians_supervised":
+        return generate_two_gaussians(n, supervised=True)
     elif dataset_type == "swiss_roll":
         return generate_swiss_roll(n)
     elif dataset_type == "two_moons":
