@@ -4,8 +4,12 @@ import numpy as np
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
 
-from models import compute_trajectories, estimate_velocities
+from plotly.subplots import make_subplots
+
+from models import compute_trajectories, estimate_velocities, labels_dictionary
 from scipy.stats import multivariate_normal
+
+LABEL_COLORS = ["orange", "green", "red", "purple", "brown", "pink", "cyan", "magenta", "yellow", "lime"]
 
 def data_ranges(*datasets, padding=0.1):
     """Helper function to compute the overall data ranges for multiple datasets, with optional padding.
@@ -68,8 +72,7 @@ def plot_distributions(source_data, target_data, target_labels=None, couplings=N
         )
     )
 
-    unique_labels = np.unique(target_labels)
-    colors = ["orange", "green", "red", "purple", "brown", "pink", "cyan", "magenta", "yellow", "lime"]
+    unique_labels = sorted(np.unique(target_labels))
     for i, label in enumerate(unique_labels):
         mask = target_labels == label
         name = "Target Data" if len(unique_labels) == 1 else f"Target Class {label}"
@@ -79,7 +82,7 @@ def plot_distributions(source_data, target_data, target_labels=None, couplings=N
                 y=target_data[mask, 1],
                 mode="markers",
                 name=name,
-                marker=dict(color=colors[i % len(colors)], size=6, opacity=0.7),
+                marker=dict(color=LABEL_COLORS[i % len(LABEL_COLORS)], size=6, opacity=0.7),
             )
         )
 
@@ -114,13 +117,15 @@ def plot_distributions(source_data, target_data, target_labels=None, couplings=N
 
     return fig
 
-def plot_velocity_field(model, source_data, target_data, grid_size=25, max_points=1000):
+def plot_velocity_field(model, source_data, target_data, target_labels=None, field_label=None, grid_size=25, max_points=1000):
     """Visualizes the velocity field of the flow model as a quiver plot.
     
     Arguments:
         model: the trained flow model with a .forward() method that takes in a tensor of shape (N, 2) and returns a tensor of shape (N, 2) representing the velocity vectors.
         source_data: numpy array of shape (N, 2) representing the source distribution points
         target_data: numpy array of shape (N, 2) representing the target distribution points
+        target_labels: optional numpy array of shape (N,) representing the labels for the target data points.
+        field_label: None to visualize the unconditional velocity field, or an integer label to visualize the velocity field conditioned on that label.
         grid_size: the number of points along each axis to create the grid for visualization.
         max_points: maximum number of points to display from each dataset (for performance reasons)
     Returns:
@@ -128,6 +133,10 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, max_point
     """
     source_data = source_data[:max_points]
     target_data = target_data[:max_points]
+    if target_labels is None:
+        target_labels = np.zeros(target_data.shape[0], dtype=int)
+    else:
+        target_labels = target_labels[:max_points]
 
     # Evaluate learned velocity field on a 2D grid and visualize vectors
     n_grid = grid_size
@@ -141,7 +150,7 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, max_point
     yg = np.linspace(y_min, y_max, n_grid)
     X, Y = np.meshgrid(xg, yg)
     grid_points = np.stack([X.ravel(), Y.ravel()], axis=1)
-    v_grid = estimate_velocities(model, grid_points)
+    v_grid = estimate_velocities(model, grid_points, label=field_label)
 
     # Build line segments for arrows: (x, y) -> (x + scale*vx, y + scale*vy)
     x_lines_field, y_lines_field = [], []
@@ -172,15 +181,19 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, max_point
         )
     )
 
-    fig_field.add_trace(
-        go.Scatter(
-            x=target_data[:, 0],
-            y=target_data[:, 1],
-            mode="markers",
-            name="Target Data",
-            marker=dict(color="orange", size=6, opacity=0.7),
+    unique_labels = sorted(np.unique(target_labels))
+    for i, label in enumerate(unique_labels):
+        mask = target_labels == label
+        name = "Target Data" if len(unique_labels) == 1 else f"Target Class {label}"
+        fig_field.add_trace(
+            go.Scatter(
+                x=target_data[mask, 0],
+                y=target_data[mask, 1],
+                mode="markers",
+                name=name,
+                marker=dict(color=LABEL_COLORS[i % len(LABEL_COLORS)], size=6, opacity=0.7),
+            )
         )
-    )
 
     for trace in quiver.data:
         fig_field.add_trace(trace)
@@ -197,6 +210,51 @@ def plot_velocity_field(model, source_data, target_data, grid_size=25, max_point
     )
 
     return fig_field
+
+def plot_class_conditional_velocity_fields(model, source_data, target_data, target_labels=None, grid_size=25, max_points=1000):
+    """Generates subplots visualizing the velocity fields of the flow model conditioned on each class label.
+    
+    Arguments:
+        model: the trained flow model with a .forward() method that takes in a tensor of shape (N, 2) and returns a tensor of shape (N, 2) representing the velocity vectors.
+        source_data: numpy array of shape (N, 2) representing the source distribution points
+        target_data: numpy array of shape (N, 2) representing the target distribution points
+        target_labels: optional numpy array of shape (N,) representing the labels for the target data points.
+        field_label: None to visualize the unconditional velocity field, or an integer label to visualize the velocity field conditioned on that label.
+        grid_size: the number of points along each axis to create the grid for visualization.
+        max_points: maximum number of points to display from each dataset (for performance reasons)
+    Returns:
+        A Plotly Figure object visualizing the velocity fields of the flow model conditioned on each class label.
+    """
+    unique_labels = list(model.labels_dict.keys())
+    n_labels = len(unique_labels)
+
+    subplot_titles = ["Unconditional velocity field"] + [f"Velocity field conditioned on label {label}" for label in unique_labels if label is not None]
+    fig = make_subplots(rows=1, cols=n_labels, subplot_titles=subplot_titles)
+
+    seen_legend_names = set()
+
+    for i, label in enumerate(unique_labels, start=1):
+        fig_field = plot_velocity_field(model, source_data, target_data, target_labels=target_labels, field_label=label, grid_size=grid_size, max_points=max_points)
+        for trace in fig_field.data:
+            trace_name = getattr(trace, "name", None)
+            if trace_name is not None:
+                trace.legendgroup = trace_name
+                trace.showlegend = trace_name not in seen_legend_names
+                seen_legend_names.add(trace_name)
+            else:
+                trace.showlegend = False
+            fig.add_trace(trace, row=1, col=i)
+
+    fig.update_layout(
+        width=450 * n_labels,
+        height=450,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5),
+        margin=dict(l=0, r=0, t=30, b=0, pad=0),
+        template="plotly_white",
+    )
+
+    return fig
 
 def plot_trajectories(trajectories, show_origins=False, target_data=None, max_points=1000, max_trajectories=1000):
     """Visualizes the trajectories induced by the flow model as a line plot.
