@@ -454,7 +454,10 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None, max
         for k in range(1, n_time)
     ]
 
-    x_range, y_range = data_ranges(*[step[1] for traj in trajectories for step in traj])
+    ranges_inputs = [step[1] for traj in trajectories for step in traj]
+    if target_data is not None:
+        ranges_inputs.append(target_data)
+    x_range, y_range = data_ranges(*ranges_inputs)
     fig_anim.update_layout(
         title="Animated Induced Trajectories",
         width=600,
