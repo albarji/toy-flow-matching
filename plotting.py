@@ -505,6 +505,169 @@ def animate_trajectories(trajectories, show_origins=False, target_data=None, max
     return fig_anim
 
 
+def animate_class_conditional_trajectories(class_trajectories, target_data=None, max_points=1000, max_trajectories=1000):
+    """Generates an animation of the class-conditional trajectories induced by the flow model as a line plot.
+    
+    Arguments:
+        class_trajectories: a dictionary where keys are class labels and values are lists of trajectories, 
+            where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model
+        target_data: numpy array of shape (N, 2) representing the target distribution points the trajectories should aim to match (optional).
+            If provided, the target points will be visualized as a scatter plot in the background for comparison.
+        max_points: maximum number of points to display from the target dataset (for performance reasons)
+        max_trajectories: maximum number of trajectories to visualize per class (for performance reasons)
+        
+    Returns:
+        A Plotly Figure object visualizing the class-conditional trajectories of points under the flow model.
+    """
+    unique_labels = sorted(class_trajectories.keys())
+
+    if target_data is not None:
+        target_data = target_data[:max_points]
+
+    # Build trajectory arrays per class: shape (n_points, n_time, 2)
+    class_traj_arrays = {}
+    for label in unique_labels:
+        trajectories = class_trajectories[label][:max_trajectories]
+        class_traj_arrays[label] = np.stack([[p for _, p in traj] for traj in trajectories])
+
+    n_time = class_traj_arrays[unique_labels[0]].shape[1]
+
+    def build_history_lines(traj_array, step_idx):
+        n_pts = traj_array.shape[0]
+        x_hist, y_hist = [], []
+        for i in range(n_pts):
+            x_hist.extend(traj_array[i, : step_idx + 1, 0].tolist())
+            y_hist.extend(traj_array[i, : step_idx + 1, 1].tolist())
+            x_hist.append(None)
+            y_hist.append(None)
+        return x_hist, y_hist
+
+    # Build initial figure data
+    figure_data = []
+
+    if target_data is not None:
+        target_scatter = go.Scatter(
+            x=target_data[:, 0],
+            y=target_data[:, 1],
+            mode="markers",
+            name="Target Data",
+            marker=dict(color="gray", size=6, opacity=0.3),
+        )
+        figure_data.append(target_scatter)
+
+    # For each class, add a trajectory-lines trace and a current-points trace
+    for idx, label in enumerate(unique_labels):
+        color = LABEL_COLORS[idx % len(LABEL_COLORS)]
+        traj_array = class_traj_arrays[label]
+        x0 = traj_array[:, 0, 0]
+        y0 = traj_array[:, 0, 1]
+
+        figure_data.append(
+            go.Scatter(
+                x=[], y=[],
+                mode="lines",
+                name=f"Trajectory (class {label})",
+                line=dict(color=color, width=1),
+                opacity=0.4,
+                hoverinfo="skip",
+            )
+        )
+        figure_data.append(
+            go.Scatter(
+                x=x0, y=y0,
+                mode="markers",
+                name=f"Generated points (class {label})",
+                marker=dict(color=color, size=5, opacity=0.8),
+            )
+        )
+
+    fig_anim = go.Figure(data=figure_data)
+
+    # Build animation frames
+    frames = []
+    for k in range(1, n_time):
+        frame_data = []
+        if target_data is not None:
+            frame_data.append(target_scatter)
+        for idx, label in enumerate(unique_labels):
+            traj_array = class_traj_arrays[label]
+            x_hist, y_hist = build_history_lines(traj_array, k)
+            frame_data.append(go.Scatter(x=x_hist, y=y_hist))
+            frame_data.append(go.Scatter(x=traj_array[:, k, 0], y=traj_array[:, k, 1]))
+        frames.append(go.Frame(name=str(k), data=frame_data))
+
+    fig_anim.frames = frames
+
+    # Compute data ranges from all trajectories
+    ranges_inputs = []
+    for label in unique_labels:
+        for traj in class_trajectories[label][:max_trajectories]:
+            for _, p in traj:
+                ranges_inputs.append(p)
+    if target_data is not None:
+        ranges_inputs.append(target_data)
+    x_range, y_range = data_ranges(*ranges_inputs)
+
+    # Slider + play controls
+    slider_steps = [
+        dict(
+            method="animate",
+            args=[
+                [str(k)],
+                dict(mode="immediate", frame=dict(duration=50, redraw=True), transition=dict(duration=0)),
+            ],
+            label=str(k),
+        )
+        for k in range(1, n_time)
+    ]
+
+    fig_anim.update_layout(
+        title="Animated Class-Conditional Trajectories",
+        width=600,
+        height=600,
+        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
+        margin=dict(l=0, r=0, t=50, b=20, pad=0),
+        template="plotly_white",
+        updatemenus=[
+            dict(
+                type="buttons",
+                showactive=False,
+                x=0.01,
+                y=0.90,
+                xanchor="left",
+                yanchor="top",
+                buttons=[
+                    dict(
+                        label="Play",
+                        method="animate",
+                        args=[
+                            None,
+                            dict(
+                                frame=dict(duration=10, redraw=True),
+                                transition=dict(duration=0),
+                                fromcurrent=True,
+                                mode="immediate",
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ],
+        sliders=[
+            dict(
+                active=0,
+                currentvalue=dict(prefix="Step: "),
+                pad=dict(t=45),
+                steps=slider_steps,
+            )
+        ],
+    )
+
+    return fig_anim
+
+
 def plot_generated_data_comparison(target_data, trajectories, max_points=1000, max_trajectories=1000):
     """Compares the original target data points with the end points of the trajectories induced by the flow model.
     
