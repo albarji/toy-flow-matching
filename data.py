@@ -20,11 +20,12 @@ def generate_two_gaussians(n=1000, supervised=False):
         np.random.multivariate_normal([-5, -5], np.array([[1, -0.75], [-0.75, 1]]), n // 2)
     ])
     perm = np.random.permutation(n)
-    ret = (data[perm],)
+    data = data[perm]
     if supervised:
         labels = np.array([0] * (n // 2) + [1] * (n // 2))
-        ret += (labels[perm],)
-    return ret
+        labels = labels[perm]
+        return data, labels
+    return data
 
 def generate_swiss_roll(n=1000):
     """Generates a toy dataset in the shape of a 2D Swiss roll.
