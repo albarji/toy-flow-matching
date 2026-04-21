@@ -227,6 +227,7 @@ def plot_class_conditional_velocity_fields(model, source_data, target_data, targ
     """
     unique_labels = list(model.labels_dict.keys())
     n_labels = len(unique_labels)
+    x_range, y_range = data_ranges(source_data[:max_points], target_data[:max_points])
 
     subplot_titles = ["Unconditional velocity field"] + [f"Velocity field conditioned on label {label}" for label in unique_labels if label is not None]
     fig = make_subplots(rows=1, cols=n_labels, subplot_titles=subplot_titles)
@@ -253,6 +254,10 @@ def plot_class_conditional_velocity_fields(model, source_data, target_data, targ
         margin=dict(l=0, r=0, t=30, b=0, pad=0),
         template="plotly_white",
     )
+
+    for col in range(1, n_labels + 1):
+        fig.update_xaxes(title_text="X1", range=x_range, constrain="domain", fixedrange=True, row=1, col=col)
+        fig.update_yaxes(title_text="X2", range=y_range, scaleanchor=f"x{col if col > 1 else ''}", row=1, col=col)
 
     return fig
 
@@ -587,6 +592,70 @@ def plot_generated_data_comparison(target_data, trajectories, max_points=1000, m
         margin=dict(l=0, r=0, t=30, b=0, pad=0),
         template="plotly_white",
     )
+
+    return fig
+
+def plot_class_conditioned_generated_data_comparison(target_data, class_trajectories, target_labels, max_points=1000, max_trajectories=1000):
+    """Compares the original target data points with the end points of the trajectories induced by the flow model conditioned on class labels.
+    
+    Arguments:
+        target_data: numpy array of shape (N, 2) representing the original target distribution points
+        class_trajectories: a dictionary mapping class labels to lists of trajectories.
+            Each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1.
+        target_labels: numpy array of shape (N,) representing the class labels of the target data points
+        max_points: maximum number of points to display from the target dataset (for performance reasons)
+        max_trajectories: maximum number of trajectories to visualize (for performance reasons)
+        
+    Returns:
+        A Plotly Figure object visualizing the comparison between original target points and generated end points for each of the classes.
+    """
+    target_data = target_data[:max_points]
+    class_trajectories = {label: trajs[:max_trajectories] for label, trajs in class_trajectories.items()}
+    end_points = {label: np.stack([traj[-1][1] for traj in trajs]) for label, trajs in class_trajectories.items()}
+    target_labels = target_labels[:max_points]
+    data_ranges_inputs = [target_data] + list(end_points.values())
+    x_range, y_range = data_ranges(*data_ranges_inputs)
+
+    unique_labels = sorted(np.unique(target_labels))
+    n_labels = len(unique_labels)
+    subplot_titles = [f"Class {label}" for label in unique_labels]
+
+    fig = make_subplots(rows=1, cols=n_labels, subplot_titles=subplot_titles)
+
+    for i, label in enumerate(unique_labels, start=0):
+        mask = target_labels == label
+        trace = go.Scatter(
+            x=target_data[mask, 0],
+            y=target_data[mask, 1],
+            mode="markers",
+            name=f"Original (target) points",
+            marker=dict(color="gray", size=6, opacity=0.7),
+            showlegend=(i == 0)
+        )
+        fig.add_trace(trace, row=1, col=i+1)
+
+        trace = go.Scatter(
+            x=end_points[label][:, 0],
+            y=end_points[label][:, 1],
+            mode="markers",
+            name=f"Generated (end) points for class {label}",
+            marker=dict(color=LABEL_COLORS[i % len(LABEL_COLORS)], size=6, opacity=0.7),
+        )
+        fig.add_trace(trace, row=1, col=i+1)
+
+
+    fig.update_layout(
+        width=500 * n_labels,
+        height=500,
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5),
+        margin=dict(l=0, r=0, t=30, b=0, pad=0),
+        template="plotly_white",
+    )
+
+    for col in range(1, n_labels + 1):
+        fig.update_xaxes(title_text="X1", range=x_range, constrain="domain", fixedrange=True, row=1, col=col)
+        fig.update_yaxes(title_text="X2", range=y_range, scaleanchor=f"x{col if col > 1 else ''}", row=1, col=col)
 
     return fig
 
