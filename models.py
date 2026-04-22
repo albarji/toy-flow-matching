@@ -57,13 +57,143 @@ class FlowMLP(nn.Module):
             emb = self.embedding(label)
             x = torch.cat([x, emb], dim=1)
         return self.net(x)
-    
+
+
+class FlowUNet(nn.Module):
+    """A U-Net convolutional architecture for modeling the velocity field in flow matching, with optional embedding layer."""
+
+    def __init__(self, in_channels: int, base_channels: int = 32, num_blocks: int = 3,
+                 embedding_size: int = None, num_embeddings: int = None):
+        """Initializes the FlowUNet model.
+
+        Args:
+            in_channels: Number of input and output channels.
+            base_channels: Number of channels produced by the first encoder block (doubles at each subsequent block).
+            num_blocks: Number of downsampling (encoder) and upsampling (decoder) convolutional blocks.
+            embedding_size: Size of the embedding vector (if using embedding layer).
+            num_embeddings: Number of distinct elements for the embedding layer. If None, no embedding layer is used.
+        """
+        super().__init__()
+        if num_blocks < 1:
+            raise ValueError("num_blocks must be >= 1")
+
+        self.has_embedding = embedding_size is not None and num_embeddings is not None
+        self.num_blocks = num_blocks
+
+        if self.has_embedding:
+            self.embedding = nn.Embedding(num_embeddings, embedding_size)
+        else:
+            self.embedding = None
+
+        # Encoder (downstream) blocks: Conv3x3 + ReLU + Conv3x3 + ReLU, then MaxPool
+        self.down_convs = nn.ModuleList()
+        self.down_pools = nn.ModuleList()
+        down_ch = []
+        in_ch = in_channels
+        for i in range(num_blocks):
+            out_ch = base_channels * (2 ** i)
+            self.down_convs.append(nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
+                nn.ReLU(),
+            ))
+            self.down_pools.append(nn.MaxPool2d(2, 2))
+            down_ch.append(out_ch)
+            in_ch = out_ch
+
+        # Bottleneck
+        bottleneck_ch = base_channels * (2 ** num_blocks)
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(in_ch, bottleneck_ch, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(bottleneck_ch, bottleneck_ch, kernel_size=3, padding=1),
+            nn.ReLU(),
+        )
+
+        # Embedding projection injected at the bottleneck via spatial broadcast
+        if self.has_embedding:
+            self.emb_proj = nn.Linear(embedding_size, bottleneck_ch)
+
+        # Decoder (upstream) blocks: ConvTranspose + skip concat + Conv3x3 + ReLU
+        self.up_transposes = nn.ModuleList()
+        self.up_convs = nn.ModuleList()
+        in_ch = bottleneck_ch
+        for i in range(num_blocks):
+            out_ch = in_ch // 2
+            skip_idx = num_blocks - 1 - i
+            skip_ch = down_ch[skip_idx] if 0 <= skip_idx < num_blocks else 0
+            self.up_transposes.append(nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2))
+            self.up_convs.append(nn.Sequential(
+                nn.Conv2d(out_ch + skip_ch, out_ch, kernel_size=3, padding=1),
+                nn.ReLU(),
+            ))
+            in_ch = out_ch
+
+        # Final pointwise convolution to get back to in_channels
+        self.final_conv = nn.Conv2d(in_ch, in_channels, kernel_size=1)
+
+        self.labels_dict = None  # Will be set during training if using supervised labels
+
+    def forward(self, x: torch.Tensor, label: torch.Tensor = None) -> torch.Tensor:
+        """Forward pass for the model.
+
+        Args:
+            x: Input tensor of shape (N, C, H, W) or (N, H, W) for grayscale, where C is the number of channels (should match in_channels).
+            label: Optional tensor of shape (N,) with integer class indices, or None.
+        """
+        # Handle grayscale input by adding a channel dimension
+        if x.ndim == 3:
+            x = x.unsqueeze(1)  # (N, 1, H, W)
+
+        # Embedding
+        if self.has_embedding:
+            if label is None:
+                label = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+            emb = self.embedding(label)  # (N, embedding_size)
+
+        # Encoder
+        skips = []
+        for i in range(self.num_blocks):
+            x = self.down_convs[i](x)
+            skips.append(x)
+            x = self.down_pools[i](x)
+
+        # Bottleneck
+        x = self.bottleneck(x)
+
+        # Inject embedding at bottleneck (broadcast over spatial dims)
+        if self.has_embedding:
+            x = x + self.emb_proj(emb)[:, :, None, None]
+
+        # Decoder
+        for i in range(self.num_blocks):
+            x = self.up_transposes[i](x)
+            skip_idx = self.num_blocks - 1 - i
+            # if 0 <= skip_idx < self.num_blocks:
+            #     skip = skips[skip_idx]
+                # if x.shape[2:] != skip.shape[2:]:  # handle odd spatial dimensions
+                #     x = nn.functional.interpolate(x, size=skip.shape[2:])
+                # x = torch.cat([x, skip], dim=1)
+            skip = skips[skip_idx]
+            x = torch.cat([x, skip], dim=1)
+            x = self.up_convs[i](x)
+
+        x = self.final_conv(x)
+
+        # Remove channel dimension if input was grayscale
+        if x.shape[1] == 1:
+            x = x.squeeze(1)
+
+        return x
+
+
 def labels_dictionary(target_labels):
     labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
     labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
     return labels_dict
     
-def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, verbose=False):
+def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
     
     Arguments:
@@ -74,9 +204,11 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
         learning_rate: the learning rate for the optimizer.
         embedding_size: the size of the embedding vector. Ignored if couplings do not contain labels.
         labels_drop_rate: if labels are provided, the probability of dropping them during training to allow learning both a general flow and a label-conditioned flow. Should be between 0 and 1.
+        network: the type of network to use ("mlp" or "unet").
+        network_args: dictionary of additional arguments for the network architecture. For "mlp", this can include "hidden_dim" and "num_blocks". For "unet", this can include "base_channels" and "num_blocks".
         verbose: whether to print training progress every 100 updates.
 
-    Returns: the trained FlowMLP model.
+    Returns: the trained neural network model.
     """
     # Prepare training tensors from existing couplings
     src_tensor = torch.tensor(np.array([coupling[0] for coupling in couplings], dtype=np.float32))
@@ -90,13 +222,22 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
 
     # Instantiate model for 2D data
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = FlowMLP(
-        input_output_dim=src_tensor.shape[1],
-        hidden_dim=128,
-        num_blocks=3,
-        embedding_size=embedding_size if supervised else None,
-        num_embeddings=num_labels if supervised else None
-    ).to(device)
+    if network_args is None:
+        network_args = {}
+    if network == "mlp":
+        model = FlowMLP(
+            input_output_dim=src_tensor.shape[1],
+            embedding_size=embedding_size if supervised else None,
+            num_embeddings=num_labels if supervised else None,
+            **network_args
+        ).to(device)
+    elif network == "unet":
+        model = FlowUNet(
+            in_channels=src_tensor.shape[1] if src_tensor.ndim == 4 else 1,  # Handle grayscale input for unet
+            embedding_size=embedding_size if supervised else None,
+            num_embeddings=num_labels if supervised else None,
+            **network_args
+        ).to(device)
     src_tensor = src_tensor.to(device)
     tgt_tensor = tgt_tensor.to(device)
     if supervised:
@@ -122,8 +263,9 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
                 mask = torch.rand(labels_batch.shape[0], device=labels_batch.device) < labels_drop_rate
                 labels_batch[mask] = 0  # Use 0 special label 0 to indicate dropped labels
 
-            # Sample t ~ Uniform[0, 1] for each pair in minibatch
-            t = torch.rand(src_batch.shape[0], 1).to(device)
+            # Sample one t per sample, then broadcast over all non-batch dimensions.
+            t_shape = (src_batch.shape[0],) + (1,) * (src_batch.ndim - 1)
+            t = torch.rand(t_shape, device=device)
 
             # Linear interpolation x_t = (1-t) * src + t * tgt
             x_t = (1.0 - t) * src_batch + t * tgt_batch
