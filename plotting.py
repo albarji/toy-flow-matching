@@ -731,3 +731,64 @@ def plot_density_map(reversed_mesh_trajectories, target_data, source_pdf=None, m
     )
 
     return fig
+
+def plot_image_grid(data, labels, samples_per_label=10):
+    """Plots a grid of images from the data, grouped by their labels.  Assumes data is of shape (N, H, W) and labels is of shape (N,).
+
+    Aruments:
+        data: numpy array of shape (N, H, W) representing the image data points
+        labels: numpy array of shape (N,) representing the class labels for each image
+        samples_per_label: number of images to display for each label (default: 10)
+
+    Returns:
+        A Plotly Figure object visualizing the image grid.
+    """
+
+    import plotly.graph_objects as go
+
+    unique_labels = np.unique(labels)
+    n_cols = 10
+    n_rows = len(unique_labels)
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        horizontal_spacing=0.005,
+        vertical_spacing=0.02
+    )
+
+    for r, label in enumerate(unique_labels, start=1):
+        sample_idx = np.where(labels == label)[0][:samples_per_label]  # 10 different samples for this label
+        for c, idx in enumerate(sample_idx, start=1):
+            fig.add_trace(
+                go.Heatmap(
+                    z=data[idx],
+                    colorscale="gray",
+                    showscale=False,
+                    hovertemplate=f"label={label}<br>sample_index={idx}<extra></extra>",
+                ),
+                row=r,
+                col=c,
+            )
+            fig.update_xaxes(showticklabels=False, row=r, col=c)
+            fig.update_yaxes(showticklabels=False, autorange="reversed", row=r, col=c)
+
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=-0.02,
+            y=1 - (r - 0.5) / n_rows,
+            text=f"Digit {label}",
+            showarrow=False,
+            xanchor="right",
+            font=dict(size=12),
+        )
+
+    fig.update_layout(
+        title="MNIST-like digits: 10 samples per label",
+        width=1100,
+        height=1100,
+        margin=dict(l=90, r=20, t=60, b=20),
+    )
+
+    return fig
