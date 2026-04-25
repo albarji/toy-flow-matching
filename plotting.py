@@ -459,7 +459,7 @@ def animate_trajectories(trajectories, target_data=None, max_points=1000, max_tr
 
     # --- animation frames ---
     frames = []
-    for k in range(1, n_time):
+    for k in range(0, n_time):
         frame_data = []
         if target_data is not None:
             frame_data.append(target_scatter)
@@ -492,7 +492,7 @@ def animate_trajectories(trajectories, target_data=None, max_points=1000, max_tr
             ],
             label=str(k),
         )
-        for k in range(1, n_time)
+        for k in range(0, n_time)
     ]
 
     title = "Animated Class-Conditional Trajectories" if is_class_conditional else "Animated Induced Trajectories"
