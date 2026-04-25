@@ -193,7 +193,7 @@ def labels_dictionary(target_labels):
     labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
     return labels_dict
     
-def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False):
+def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False, log_frequency=20):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
     
     Arguments:
@@ -206,7 +206,8 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
         labels_drop_rate: if labels are provided, the probability of dropping them during training to allow learning both a general flow and a label-conditioned flow. Should be between 0 and 1.
         network: the type of network to use ("mlp" or "unet").
         network_args: dictionary of additional arguments for the network architecture. For "mlp", this can include "hidden_dim" and "num_blocks". For "unet", this can include "base_channels" and "num_blocks".
-        verbose: whether to print training progress every 100 updates.
+        verbose: whether to print training progress information.
+        log_frequency: how often to log training progress (in number of updates).
 
     Returns: the trained neural network model.
     """
@@ -287,7 +288,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
         scheduler.step()
         epoch_loss /= src_tensor.shape[0]
         if verbose:
-            if (epoch + 1) % 20 == 0 or epoch == 0:
+            if (epoch + 1) % log_frequency == 0 or epoch == 0:
                 print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {epoch_loss:.6f}, LR: {scheduler.get_last_lr()[0]:.6f}")
 
     return model
