@@ -193,7 +193,8 @@ def labels_dictionary(target_labels):
     labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
     return labels_dict
     
-def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False, log_frequency=20):
+def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False, 
+                     log_frequency=20, train_distilled_network=False):
     """Trains a FlowMLP model to learn the velocity field that transforms source_data to target_data.
     
     Arguments:
@@ -208,6 +209,8 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
         network_args: dictionary of additional arguments for the network architecture. For "mlp", this can include "hidden_dim" and "num_blocks". For "unet", this can include "base_channels" and "num_blocks".
         verbose: whether to print training progress information.
         log_frequency: how often to log training progress (in number of updates).
+        train_distilled_network: whether to train a the network in distillation mode, which means it will only learn how to directly
+            map source to target without learning the velocity field at all interpolated points.
 
     Returns: the trained neural network model.
     """
@@ -266,7 +269,10 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
 
             # Sample one t per sample, then broadcast over all non-batch dimensions.
             t_shape = (src_batch.shape[0],) + (1,) * (src_batch.ndim - 1)
-            t = torch.rand(t_shape, device=device)
+            if train_distilled_network:
+                t = torch.zeros(t_shape, device=device)  # Always use t=0 for distillation mode (directly map source to target)
+            else:
+                t = torch.rand(t_shape, device=device)
 
             # Linear interpolation x_t = (1-t) * src + t * tgt
             x_t = (1.0 - t) * src_batch + t * tgt_batch
