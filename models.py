@@ -356,12 +356,12 @@ def euler_integrate(initial_points, velocity_fn, n_steps):
 
     return path
 
-def compute_trajectories(model, source_data, n_steps=50, batch_size=128, reverse=False, label=None):
+def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, reverse=False, label=None):
     """Computes trajectories of points from the source distribution under the learned flow model.
 
     Arguments:
-        model: the trained flow model that takes in a tensor of shape (N, d) and returns a tensor of shape (N, d) representing the velocity vectors.
-        source_data: numpy array of shape (N, d) representing the source distribution points
+        model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
+        source_data: numpy array of shape (N, *) representing the source distribution points
         n_steps: the number of integration steps to use for computing trajectories.
             Fewer steps means faster but less accurate trajectories.
         batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
@@ -386,3 +386,28 @@ def compute_trajectories(model, source_data, n_steps=50, batch_size=128, reverse
             trajectories.append([(ts[t], points[t][data_idx]) for t in range(n_steps + 1)])
 
     return trajectories
+
+def reflow(couplings, model_arguments=None, simulation_arguments=None, source_data_generator=None, label=None):
+    """Generates new couplings by learning a flow model between the source and target distributions and then flowing the source points through the learned velocity field.
+
+    Arguments:
+        model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
+        couplings: list of (source, target) tuples representing the initial couplings
+        model_arguments: dictionary of arguments to pass to the model during training (e.g. embedding size, network architecture).
+        simulation_arguments: dictionary of arguments to pass to the trajectory simulation (e.g. n_steps, batch_size).
+        source_data_generator: optional function to generate source data if not using the couplings directly. Should return a numpy array of shape (N, *).
+            If None, generate points from a gaussian distribution following the shape of the source points in the couplings.
+        label: optional integer representing the label for which to estimate velocities (if the model is conditional).
+
+    Returns:
+        - A list of (source, new_target) tuples, where new_target is the result of flowing the source point through the learned velocity field.
+        - The learnt flow model.
+    """
+    model = train_flow_model(couplings, **(model_arguments or {}))
+    if source_data_generator is not None:
+        source_data = source_data_generator()
+    else:
+        source_dim = [len(couplings)] + list(couplings[0][0].shape)
+        source_data = np.random.randn(*source_dim)
+    trajectories = compute_trajectories(model, source_data, **(simulation_arguments or {}), label=label)
+    return [(src, traj[-1][1]) for src, traj in zip(source_data, trajectories)], model
