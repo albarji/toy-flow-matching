@@ -552,22 +552,25 @@ def animate_trajectories(trajectories, target_data=None, max_points=1000, max_tr
 
     return fig_anim
 
-def plot_generated_data_comparison(target_data, trajectories, max_points=1000, max_trajectories=1000):
+def plot_generated_data_comparison(target_data, trajectories_or_generated_data, max_points=1000):
     """Compares the original target data points with the end points of the trajectories induced by the flow model.
     
     Arguments:
         target_data: numpy array of shape (N, 2) representing the original target distribution points
-        trajectories: a list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model
+        trajectories_or_generated_data: a list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model, 
+            or a numpy array of generated data points.
         max_points: maximum number of points to display from the target dataset (for performance reasons)
-        max_trajectories: maximum number of trajectories to visualize (for performance reasons)
         
     Returns:
         A Plotly Figure object visualizing the comparison between original target points and generated end points.
     """
     target_data = target_data[:max_points]
-    trajectories = trajectories[:max_trajectories]
-    end_points = np.stack([traj[-1][1] for traj in trajectories])
-    x_range, y_range = data_ranges(target_data, end_points)
+    if isinstance(trajectories_or_generated_data, list):
+        generated_data = np.stack([traj[-1][1] for traj in trajectories_or_generated_data])
+    else:
+        generated_data = trajectories_or_generated_data
+    generated_data = generated_data[:max_points]
+    x_range, y_range = data_ranges(target_data, generated_data)
 
     fig = go.Figure()
 
@@ -583,8 +586,8 @@ def plot_generated_data_comparison(target_data, trajectories, max_points=1000, m
 
     fig.add_trace(
         go.Scatter(
-            x=end_points[:, 0],
-            y=end_points[:, 1],
+            x=generated_data[:, 0],
+            y=generated_data[:, 1],
             mode="markers",
             name="Generated (end) points",
             marker=dict(color="red", size=6, opacity=0.7),
