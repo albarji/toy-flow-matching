@@ -8,7 +8,7 @@ import torch.optim as optim
 
 class FlowMLP(nn.Module):
     """A simple MLP architecture for modeling the velocity field in flow matching, with optional embedding layer."""
-    def __init__(self, input_output_dim: int, hidden_dim: int, num_blocks: int, embedding_size: int = None, num_embeddings: int = None):
+    def __init__(self, input_output_dim: int, hidden_dim: int = 128, num_blocks: int = 3, embedding_size: int = None, num_embeddings: int = None):
         """Initializes the FlowMLP model.
 
         Args:
