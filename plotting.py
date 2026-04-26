@@ -350,7 +350,7 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None, max_po
 
     return fig_traj
 
-def animate_trajectories(trajectories, target_data=None, max_points=1000, max_trajectories=1000):
+def animate_trajectories(trajectories, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50):
     """Generates an animation of trajectories induced by the flow model.
 
     Supports both a single list of trajectories (unconditional) and a dictionary
@@ -366,6 +366,8 @@ def animate_trajectories(trajectories, target_data=None, max_points=1000, max_tr
         max_points: maximum number of target points to display.
         max_trajectories: maximum number of trajectories to visualize (per class
             when a dict is provided).
+        max_trajectory_steps: maximum number of time steps to visualize along each trajectory (for performance reasons).
+            If trajectories have more steps, they will be subsampled to this number of steps.
 
     Returns:
         A Plotly Figure object with the animated trajectories.
@@ -377,6 +379,13 @@ def animate_trajectories(trajectories, target_data=None, max_points=1000, max_tr
     else:
         class_trajectories = {None: trajectories[:max_trajectories]}
         is_class_conditional = False
+
+    # Susbample trajectories to max_trajectory_steps if needed
+    for label, trajs in class_trajectories.items():
+        for i, traj in enumerate(trajs):
+            if len(traj) > max_trajectory_steps:
+                indices = np.linspace(0, len(traj) - 1, max_trajectory_steps, dtype=int)
+                class_trajectories[label][i] = [traj[idx] for idx in indices]
 
     if target_data is not None:
         target_data = target_data[:max_points]
