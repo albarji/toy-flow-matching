@@ -425,7 +425,7 @@ def reflow(couplings, model_arguments=None, simulation_arguments=None, source_da
         labels = None
 
     # Compute trajectories
-    trajectories = compute_trajectories(model, source_data, labels=labels)
+    trajectories = compute_trajectories(model, source_data, **(simulation_arguments or {}), labels=labels)
 
     new_couplings = list(zip(source_data, [traj[-1][-1] for traj in trajectories], labels)) if is_supervised else list(zip(source_data, [traj[-1][-1] for traj in trajectories]))
 
