@@ -150,7 +150,7 @@ def plot_velocity_field(model, source_data, target_data, target_labels=None, fie
     yg = np.linspace(y_min, y_max, n_grid)
     X, Y = np.meshgrid(xg, yg)
     grid_points = np.stack([X.ravel(), Y.ravel()], axis=1)
-    v_grid = estimate_velocities(model, grid_points, label=field_label)
+    v_grid = estimate_velocities(model, grid_points, labels=np.full(grid_points.shape[0], field_label) if field_label is not None else None)
 
     # Build line segments for arrows: (x, y) -> (x + scale*vx, y + scale*vy)
     x_lines_field, y_lines_field = [], []
@@ -350,37 +350,47 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None, max_po
 
     return fig_traj
 
-def animate_trajectories(trajectories, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50):
+def animate_trajectories(trajectories, labels=None, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50):
     """Generates an animation of trajectories induced by the flow model.
 
-    Supports both a single list of trajectories (unconditional) and a dictionary
-    of class-label -> trajectories (class-conditional).  When a dict is provided
-    each class is drawn in its own colour from LABEL_COLORS.
+    Supports both unconditional and class-conditional visualizations from a
+    single list of trajectories. When labels are provided, each class is drawn
+    in its own colour from LABEL_COLORS.
 
     Arguments:
-        trajectories: either a list of trajectories, or a dictionary mapping class
-            labels to lists of trajectories.  Each trajectory is a list of
+        trajectories: list of trajectories. Each trajectory is a list of
             (t, point) tuples representing the path of a point from t=0 to t=1.
+        labels: optional array-like of shape (len(trajectories),) with class
+            labels for each trajectory. If provided, trajectories are grouped by
+            label for class-conditional visualization.
         target_data: optional numpy array of shape (N, 2) with target points to
             display in the background for comparison.
         max_points: maximum number of target points to display.
-        max_trajectories: maximum number of trajectories to visualize (per class
-            when a dict is provided).
+        max_trajectories: maximum number of trajectories to visualize.
         max_trajectory_steps: maximum number of time steps to visualize along each trajectory (for performance reasons).
             If trajectories have more steps, they will be subsampled to this number of steps.
 
     Returns:
         A Plotly Figure object with the animated trajectories.
     """
-    # Normalise input: always work with {label: trajectories} dict
-    if isinstance(trajectories, dict):
-        class_trajectories = {label: trajs[:max_trajectories] for label, trajs in trajectories.items()}
-        is_class_conditional = True
-    else:
-        class_trajectories = {None: trajectories[:max_trajectories]}
-        is_class_conditional = False
+    trajectories = trajectories[:max_trajectories]
+    if not trajectories:
+        raise ValueError("trajectories must contain at least one trajectory")
 
-    # Susbample trajectories to max_trajectory_steps if needed
+    # Always normalize to {label: trajectories} for internal processing.
+    if labels is None:
+        class_trajectories = {None: trajectories}
+        is_class_conditional = False
+    else:
+        labels = np.asarray(labels)[:max_trajectories]
+        if labels.shape[0] != len(trajectories):
+            raise ValueError("labels must have the same length as trajectories")
+        class_trajectories = {}
+        for traj, label in zip(trajectories, labels):
+            class_trajectories.setdefault(label, []).append(traj)
+        is_class_conditional = True
+
+    # Subsample trajectories to max_trajectory_steps if needed
     for label, trajs in class_trajectories.items():
         for i, traj in enumerate(trajs):
             if len(traj) > max_trajectory_steps:
@@ -607,13 +617,14 @@ def plot_generated_data_comparison(target_data, trajectories_or_generated_data, 
 
     return fig
 
-def plot_class_conditioned_generated_data_comparison(target_data, class_trajectories, target_labels, max_points=1000, max_trajectories=1000):
+def plot_class_conditioned_generated_data_comparison(target_data, trajectories, trajectories_labels, target_labels, max_points=1000, max_trajectories=1000):
     """Compares the original target data points with the end points of the trajectories induced by the flow model conditioned on class labels.
     
     Arguments:
         target_data: numpy array of shape (N, 2) representing the original target distribution points
-        class_trajectories: a dictionary mapping class labels to lists of trajectories.
+        trajectories: list of trajectories.
             Each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1.
+        trajectories_labels: array-like of shape (len(trajectories),) with class labels for each trajectory.
         target_labels: numpy array of shape (N,) representing the class labels of the target data points
         max_points: maximum number of points to display from the target dataset (for performance reasons)
         max_trajectories: maximum number of trajectories to visualize (for performance reasons)
@@ -622,7 +633,17 @@ def plot_class_conditioned_generated_data_comparison(target_data, class_trajecto
         A Plotly Figure object visualizing the comparison between original target points and generated end points for each of the classes.
     """
     target_data = target_data[:max_points]
-    class_trajectories = {label: trajs[:max_trajectories] for label, trajs in class_trajectories.items()}
+    trajectories = trajectories[:max_trajectories]
+    trajectories_labels = np.asarray(trajectories_labels)[:max_trajectories]
+    if len(trajectories) == 0:
+        raise ValueError("trajectories must contain at least one trajectory")
+    if trajectories_labels.shape[0] != len(trajectories):
+        raise ValueError("trajectories_labels must have the same length as trajectories")
+
+    class_trajectories = {}
+    for traj, label in zip(trajectories, trajectories_labels):
+        class_trajectories.setdefault(label, []).append(traj)
+
     end_points = {label: np.stack([traj[-1][1] for traj in trajs]) for label, trajs in class_trajectories.items()}
     target_labels = target_labels[:max_points]
     data_ranges_inputs = [target_data] + list(end_points.values())

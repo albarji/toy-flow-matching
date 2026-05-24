@@ -43,18 +43,18 @@ class FlowMLP(nn.Module):
 
         self.labels_dict = None  # Will be set during training if using supervised labels
 
-    def forward(self, x: torch.Tensor, label: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, labels: torch.Tensor = None) -> torch.Tensor:
         """
         Forward pass for the model.
 
         Args:
             x: Input tensor of shape (N, input_output_dim)
-            label: Optional tensor of shape (N,) with integer class indices, or None.
+            labels: Optional tensor of shape (N,) with integer class indices, or None.
         """
         if self.has_embedding:
-            if label is None:
-                label = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)  # Use 0 as special label for no label
-            emb = self.embedding(label)
+            if labels is None:
+                labels = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)  # Use 0 as special label for no label
+            emb = self.embedding(labels)  # (N, embedding_size)
             x = torch.cat([x, emb], dim=1)
         return self.net(x)
 
@@ -135,12 +135,12 @@ class FlowUNet(nn.Module):
 
         self.labels_dict = None  # Will be set during training if using supervised labels
 
-    def forward(self, x: torch.Tensor, label: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, labels: torch.Tensor = None) -> torch.Tensor:
         """Forward pass for the model.
 
         Args:
             x: Input tensor of shape (N, C, H, W) or (N, H, W) for grayscale, where C is the number of channels (should match in_channels).
-            label: Optional tensor of shape (N,) with integer class indices, or None.
+            labels: Optional tensor of shape (N,) with integer class indices, or None.
         """
         # Handle grayscale input by adding a channel dimension
         if x.ndim == 3:
@@ -148,9 +148,9 @@ class FlowUNet(nn.Module):
 
         # Embedding
         if self.has_embedding:
-            if label is None:
-                label = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
-            emb = self.embedding(label)  # (N, embedding_size)
+            if labels is None:
+                labels = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+            emb = self.embedding(labels)  # (N, embedding_size)
 
         # Encoder
         skips = []
@@ -316,13 +316,13 @@ def sample_independent_couplings(source_data, target_data, num_couplings, target
     else:
         return [(source_data[src_idx], target_data[tgt_idx], target_labels[tgt_idx]) for src_idx, tgt_idx in zip(src_indices, tgt_indices)]
 
-def estimate_velocities(model, points, label=None):
+def estimate_velocities(model, points, labels=None):
     """Helper function to estimate velocity vectors at given points using the trained model.
     
     Arguments:
         model: an already trained flow model.
         points: numpy array of shape (N, d) representing the points at which to estimate velocities.
-        label: optional integer representing the label for which to estimate velocities (if the model is conditional).
+        labels: optional integer array of shape (N,) representing the labels for which to estimate velocities (if the model is conditional).
 
     Returns: numpy array of shape (N, d) representing the estimated velocity vectors.
     """
@@ -330,8 +330,8 @@ def estimate_velocities(model, points, label=None):
     device = next(model.parameters()).device
     with torch.no_grad():
         modelargs = (torch.tensor(points, dtype=torch.float32, device=device),)
-        if label is not None:
-            modelargs += (torch.full((points.shape[0],), model.labels_dict[label], dtype=torch.long, device=device),)
+        if labels is not None:
+            modelargs += (torch.tensor([model.labels_dict[label] for label in labels], dtype=torch.long, device=device),)
         return model(*modelargs).cpu().numpy()
 
 def euler_integrate(initial_points, velocity_fn, n_steps):
@@ -362,7 +362,7 @@ def euler_integrate(initial_points, velocity_fn, n_steps):
 
     return path
 
-def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, reverse=False, label=None):
+def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, reverse=False, labels=None):
     """Computes trajectories of points from the source distribution under the learned flow model.
 
     Arguments:
@@ -372,7 +372,7 @@ def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, rever
             Fewer steps means faster but less accurate trajectories.
         batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
         reverse: if True, integrates backward from target to source instead of forward from source to target.
-        label: optional integer representing the label for which to estimate velocities (if the model is conditional).
+        labels: optional integer array of shape (N,) representing the labels for which to estimate velocities (if the model is conditional).
 
     Returns:
         A list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
@@ -381,8 +381,8 @@ def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, rever
     for i in range(0, source_data.shape[0], batch_size):
         batch_points = source_data[i:i + batch_size]
         model_kwargs = {}
-        if label is not None:
-            model_kwargs['label'] = label
+        if labels is not None:
+            model_kwargs['labels'] = labels[i:i + batch_size]
         if reverse:
             trajectories_batch = euler_integrate(batch_points, lambda x: -estimate_velocities(model, x, **model_kwargs), n_steps)
         else:
@@ -393,27 +393,40 @@ def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, rever
 
     return trajectories
 
-def reflow(couplings, model_arguments=None, simulation_arguments=None, source_data_generator=None, label=None):
+def reflow(couplings, model_arguments=None, simulation_arguments=None, source_data_generator=None):
     """Generates new couplings by learning a flow model between the source and target distributions and then flowing the source points through the learned velocity field.
 
     Arguments:
-        model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
-        couplings: list of (source, target) tuples representing the initial couplings
+        couplings: list of (source, target) tuples representing the initial couplings, or list of (source, target, label) tuples if using supervised labels.
         model_arguments: dictionary of arguments to pass to the model during training (e.g. embedding size, network architecture).
         simulation_arguments: dictionary of arguments to pass to the trajectory simulation (e.g. n_steps, batch_size).
         source_data_generator: optional function to generate source data if not using the couplings directly. Should return a numpy array of shape (N, *).
             If None, generate points from a gaussian distribution following the shape of the source points in the couplings.
-        label: optional integer representing the label for which to estimate velocities (if the model is conditional).
 
     Returns:
         - A list of (source, new_target) tuples, where new_target is the result of flowing the source point through the learned velocity field.
         - The learnt flow model.
     """
+    is_supervised = any(len(coupling) == 3 for coupling in couplings)
+
+    # Train flow model on couplings
     model = train_flow_model(couplings, **(model_arguments or {}))
+    # Generate new data from source distribution
     if source_data_generator is not None:
         source_data = source_data_generator()
     else:
         source_dim = [len(couplings)] + list(couplings[0][0].shape)
         source_data = np.random.randn(*source_dim)
-    trajectories = compute_trajectories(model, source_data, **(simulation_arguments or {}), label=label)
-    return [(src, traj[-1][1]) for src, traj in zip(source_data, trajectories)], model
+    # Generate labels for source data if model is conditional, following the label distribution in the couplings
+    if is_supervised:
+        original_labels = [coupling[2] for coupling in couplings]
+        labels = np.random.choice(original_labels, size=source_data.shape[0], replace=True)
+    else:
+        labels = None
+
+    # Compute trajectories
+    trajectories = compute_trajectories(model, source_data, labels=labels)
+
+    new_couplings = list(zip(source_data, [traj[-1][-1] for traj in trajectories], labels)) if is_supervised else list(zip(source_data, [traj[-1][-1] for traj in trajectories]))
+
+    return new_couplings, model
