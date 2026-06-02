@@ -1,12 +1,17 @@
 """Module with fucntions for creating visualizations and animations"""
 
+import os
+import tempfile
+
+
+import imageio.v2 as imageio
 import numpy as np
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
 
 from plotly.subplots import make_subplots
 
-from models import compute_trajectories, estimate_velocities, labels_dictionary
+from models import estimate_velocities
 from scipy.stats import multivariate_normal
 
 LABEL_COLORS = ["orange", "green", "red", "purple", "brown", "pink", "cyan", "magenta", "yellow", "lime"]
@@ -350,7 +355,7 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None, max_po
 
     return fig_traj
 
-def animate_trajectories(trajectories, labels=None, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50):
+def animate_trajectories(trajectories, labels=None, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50, draw_controls=True):
     """Generates an animation of trajectories induced by the flow model.
 
     Supports both unconditional and class-conditional visualizations from a
@@ -369,6 +374,7 @@ def animate_trajectories(trajectories, labels=None, target_data=None, max_points
         max_trajectories: maximum number of trajectories to visualize.
         max_trajectory_steps: maximum number of time steps to visualize along each trajectory (for performance reasons).
             If trajectories have more steps, they will be subsampled to this number of steps.
+        draw_controls: if True, adds play button and slider controls to the animation.
 
     Returns:
         A Plotly Figure object with the animated trajectories.
@@ -502,30 +508,9 @@ def animate_trajectories(trajectories, labels=None, target_data=None, max_points
     x_range, y_range = data_ranges(*ranges_inputs)
 
     # --- slider + play controls ---
-    slider_steps = [
-        dict(
-            method="animate",
-            args=[
-                [str(k)],
-                dict(mode="immediate", frame=dict(duration=50, redraw=True), transition=dict(duration=0)),
-            ],
-            label=str(k),
-        )
-        for k in range(0, n_time)
-    ]
 
-    title = "Animated Class-Conditional Trajectories" if is_class_conditional else "Animated Induced Trajectories"
-
-    fig_anim.update_layout(
-        title=title,
-        width=600,
-        height=600,
-        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
-        yaxis=dict(title="X2", range=y_range, scaleanchor="x"),
-        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
-        margin=dict(l=0, r=0, t=50, b=20, pad=0),
-        template="plotly_white",
-        updatemenus=[
+    if draw_controls:
+        buttons = [
             dict(
                 type="buttons",
                 showactive=False,
@@ -549,15 +534,37 @@ def animate_trajectories(trajectories, labels=None, target_data=None, max_points
                     )
                 ],
             )
-        ],
-        sliders=[
+        ]
+        slider_steps = [
+            dict(
+                method="animate",
+                args=[
+                    [str(k)],
+                    dict(mode="immediate", frame=dict(duration=50, redraw=True), transition=dict(duration=0)),
+                ],
+                label=str(k),
+            )
+            for k in range(0, n_time)
+        ]
+        sliders = [
             dict(
                 active=0,
                 currentvalue=dict(prefix="Step: "),
                 pad=dict(t=45),
                 steps=slider_steps,
             )
-        ],
+        ]
+    fig_anim.update_layout(
+        title="Animated Class-Conditional Trajectories" if is_class_conditional else "Animated Induced Trajectories",
+        width=600,
+        height=600,
+        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", range=y_range, scaleanchor="x"), 
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
+        margin=dict(l=0, r=0, t=50, b=20, pad=0) if draw_controls else dict(l=0, r=0, t=30, b=0, pad=0),
+        template="plotly_white",
+        updatemenus=buttons if draw_controls else [],
+        sliders=sliders if draw_controls else [],
     )
 
     return fig_anim
@@ -825,3 +832,43 @@ def plot_image_grid(data, labels, samples_per_label=10):
     )
 
     return fig
+
+
+def plotly_animation_to_mp4(animation, output_path="animation.mp4", fps=20, width=900, height=700):
+    """
+    Export a Plotly animated figure (go.Figure with .frames) to MP4.
+    The interactive animation controls (Play button and slider) are removed
+    from the exported video frames.
+    """
+    if not animation.frames:
+        raise ValueError("The figure has no frames. 'animation.frames' is empty.")
+
+    # Build a base figure from the original one (without dynamic frame state)
+    base = go.Figure(animation)
+
+    # Create temporary directory for frame images
+    with tempfile.TemporaryDirectory() as tmpdir:
+        png_paths = []
+
+        # Render each frame
+        for i, fr in enumerate(animation.frames):
+            fig_i = go.Figure(base)
+
+            # Apply frame data if present
+            if hasattr(fr, "data") and fr.data is not None:
+                fig_i.update(data=fr.data)
+
+            # Apply frame layout updates if present
+            if hasattr(fr, "layout") and fr.layout is not None:
+                fig_i.update_layout(fr.layout)
+
+            png_path = os.path.join(tmpdir, f"frame_{i:05d}.png")
+            fig_i.write_image(png_path, format="png", width=width, height=height, scale=2)
+            png_paths.append(png_path)
+
+        # Write MP4
+        with imageio.get_writer(output_path, fps=fps, codec="libx264", quality=8) as writer:
+            for p in png_paths:
+                writer.append_data(imageio.imread(p))
+
+    print(f"Saved MP4 to: {output_path}")
