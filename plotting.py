@@ -11,8 +11,11 @@ import plotly.graph_objects as go
 
 from plotly.subplots import make_subplots
 
+import distances
 from models import estimate_velocities
 from scipy.stats import multivariate_normal
+
+import models
 
 LABEL_COLORS = ["orange", "green", "red", "purple", "brown", "pink", "cyan", "magenta", "yellow", "lime"]
 
@@ -829,6 +832,54 @@ def plot_image_grid(data, labels, samples_per_label=10):
         width=1100,
         height=1100,
         margin=dict(l=90, r=20, t=60, b=20),
+    )
+
+    return fig
+
+
+def plot_euler_steps_vs_wasserstein_distance(network, source_data, target_data, min_steps=1, max_steps=50, num_steps=25):
+    """Plots the Wasserstein distance between the original target data and the generated data obtained by applying the flow model with different numbers of Euler steps.
+    
+    Arguments:
+        network: the trained flow model
+        source_data: numpy array of shape representing the source distribution points
+        target_data: numpy array of shape representing the target distribution points
+        min_steps: minimum number of Euler steps (default: 1)
+        max_steps: maximum number of Euler steps (default: 50)
+        num_steps: number of steps to evaluate between min_steps and max_steps (default: 25)
+
+    Returns:
+        A Plotly Figure object visualizing the relationship between the number of Euler steps and the Wasserstein distance to the target data.
+    """
+    euler_steps, wasserstein_distances = [], []
+
+    for steps in np.logspace(np.log10(min_steps), np.log10(max_steps), num=num_steps, dtype=int):
+        few_step_trajectories = models.compute_trajectories(network, source_data, n_steps=steps, batch_size=2048)
+        generated_data = np.array([traj[-1][1] for traj in few_step_trajectories])
+        euler_steps.append(steps)
+        distance = distances.wasserstein_distance(target_data, generated_data)
+        wasserstein_distances.append(distance)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=euler_steps,
+            y=wasserstein_distances,
+            mode="lines+markers+text",
+            text=[str(steps) for steps in euler_steps],
+            textposition="top right",
+            textfont=dict(size=9)
+        )
+    )
+    fig.update_layout(
+        title="Wasserstein Distance vs Number of Euler Steps",
+        xaxis_title="Number of Euler Steps",
+        yaxis_title="Wasserstein Distance",
+        yaxis_type="log",
+        width=800,
+        height=400,
+        template="plotly_white",
+        margin=dict(l=0, r=0, t=30, b=0, pad=0)
     )
 
     return fig
