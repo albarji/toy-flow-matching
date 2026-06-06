@@ -19,6 +19,6 @@ def wasserstein_distance(X, Y, max_samples=1000):
     X_subsample = X[np.random.permutation(len(X))[:n_samples]]
     Y_subsample = Y[np.random.permutation(len(Y))[:n_samples]]
 
-    sol = ot.solve_sample(X_subsample, Y_subsample)
+    sol = ot.solve_sample(X_subsample, Y_subsample, metric="euclidean")
     return sol.value
     
