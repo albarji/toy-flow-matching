@@ -358,7 +358,8 @@ def plot_trajectories(trajectories, show_origins=False, target_data=None, max_po
 
     return fig_traj
 
-def animate_trajectories(trajectories, labels=None, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50, draw_controls=True):
+def animate_trajectories(trajectories, labels=None, target_data=None, max_points=1000, max_trajectories=1000, max_trajectory_steps=50, 
+                         draw_controls=True, title="Animated Trajectories", draw_axes=True, draw_legend=True):
     """Generates an animation of trajectories induced by the flow model.
 
     Supports both unconditional and class-conditional visualizations from a
@@ -378,6 +379,9 @@ def animate_trajectories(trajectories, labels=None, target_data=None, max_points
         max_trajectory_steps: maximum number of time steps to visualize along each trajectory (for performance reasons).
             If trajectories have more steps, they will be subsampled to this number of steps.
         draw_controls: if True, adds play button and slider controls to the animation.
+        title: title of the plot.
+        draw_axes: if True, draws x and y axes with labels; if False, hides axes for a cleaner look.
+        draw_legend: if True, displays the legend; if False, hides the legend.
 
     Returns:
         A Plotly Figure object with the animated trajectories.
@@ -557,14 +561,23 @@ def animate_trajectories(trajectories, labels=None, target_data=None, max_points
                 steps=slider_steps,
             )
         ]
+
+    # Margins adjustment
+    margin = dict(l=0, r=0, t=0, b=0, pad=0)
+    if title != "":
+        margin['t'] += 30
+    if draw_controls:
+        margin['t'] += 20
+        margin['b'] += 20
+
     fig_anim.update_layout(
-        title="Animated Class-Conditional Trajectories" if is_class_conditional else "Animated Induced Trajectories",
+        title=title,
         width=600,
         height=600,
-        xaxis=dict(title="X1", range=x_range, constrain="domain", fixedrange=True),
-        yaxis=dict(title="X2", range=y_range, scaleanchor="x"), 
-        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
-        margin=dict(l=0, r=0, t=50, b=20, pad=0) if draw_controls else dict(l=0, r=0, t=30, b=0, pad=0),
+        xaxis=dict(title="X1", visible=draw_axes, range=x_range, constrain="domain", fixedrange=True),
+        yaxis=dict(title="X2", visible=draw_axes, range=y_range, scaleanchor="x"),
+        legend=dict(visible=draw_legend, orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
+        margin=margin,
         template="plotly_white",
         updatemenus=buttons if draw_controls else [],
         sliders=sliders if draw_controls else [],
@@ -837,11 +850,11 @@ def plot_image_grid(data, labels, samples_per_label=10):
     return fig
 
 
-def plot_euler_steps_vs_wasserstein_distance(network, source_data, target_data, min_steps=1, max_steps=50, num_steps=25):
+def plot_euler_steps_vs_wasserstein_distance(networks, source_data, target_data, min_steps=1, max_steps=50, num_steps=25):
     """Plots the Wasserstein distance between the original target data and the generated data obtained by applying the flow model with different numbers of Euler steps.
     
     Arguments:
-        network: the trained flow model
+        networks: either a single network representing the flow model, or a dictionary of {label: network} to compare in the plot.
         source_data: numpy array of shape representing the source distribution points
         target_data: numpy array of shape representing the target distribution points
         min_steps: minimum number of Euler steps (default: 1)
@@ -851,21 +864,28 @@ def plot_euler_steps_vs_wasserstein_distance(network, source_data, target_data, 
     Returns:
         A Plotly Figure object visualizing the relationship between the number of Euler steps and the Wasserstein distance to the target data.
     """
-    euler_steps, wasserstein_distances = [], []
+    if not isinstance(networks, dict):
+        networks = {"": networks}
 
-    for steps in np.logspace(np.log10(min_steps), np.log10(max_steps), num=num_steps, dtype=int):
-        few_step_trajectories = models.compute_trajectories(network, source_data, n_steps=steps, batch_size=2048)
-        generated_data = np.array([traj[-1][1] for traj in few_step_trajectories])
-        euler_steps.append(steps)
-        distance = distances.wasserstein_distance(target_data, generated_data)
-        wasserstein_distances.append(distance)
+    euler_steps = np.logspace(np.log10(min_steps), np.log10(max_steps), num=num_steps, dtype=int)
+    wasserstein_distances = {network_name: [] for network_name in networks.keys()}
+
+    for steps in euler_steps:
+        for network_name, network in networks.items():
+            trajectories = models.compute_trajectories(network, source_data, n_steps=steps, batch_size=2048)
+            generated_data = np.array([traj[-1][1] for traj in trajectories])
+            distance = distances.wasserstein_distance(target_data, generated_data)
+            wasserstein_distances[network_name].append(distance)
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=euler_steps,
-            y=wasserstein_distances,
-            mode="lines+markers+text",
+    for network_name, network_distances in wasserstein_distances.items():
+        fig.add_trace(
+            go.Scatter(
+                x=euler_steps,
+                y=network_distances,
+                # mode="lines+markers+text",
+                mode="lines+markers",
+                name=network_name,
             text=[str(steps) for steps in euler_steps],
             textposition="top right",
             textfont=dict(size=9)
@@ -874,12 +894,18 @@ def plot_euler_steps_vs_wasserstein_distance(network, source_data, target_data, 
     fig.update_layout(
         title="Wasserstein Distance vs Number of Euler Steps",
         xaxis_title="Number of Euler Steps",
+        xaxis=dict(
+            tickmode="array",
+            tickvals=euler_steps,
+            ticktext=[str(steps) for steps in euler_steps],
+        ),
         yaxis_title="Wasserstein Distance",
         yaxis_type="log",
         width=800,
         height=400,
         template="plotly_white",
-        margin=dict(l=0, r=0, t=30, b=0, pad=0)
+        margin=dict(l=0, r=0, t=30, b=0, pad=0),
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="center", x=0.5),
     )
 
     return fig
