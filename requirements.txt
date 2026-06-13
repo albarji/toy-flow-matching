@@ -2,8 +2,12 @@ imageio[ffmpeg]==2.37.3
 ipykernel==7.2.0
 kaleido==1.2.0
 nbformat==5.10.4
+datasets==4.0.0
 numpy==2.4.4
+pillow==11.3.0
 plotly==6.6.0
 POT==0.9.6.post1
 scikit_learn==1.8.0
+streamlit==1.46.0
 torch==2.11.0
+torchview==0.2.7

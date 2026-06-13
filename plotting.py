@@ -8,14 +8,16 @@ import imageio.v2 as imageio
 import numpy as np
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
+import torch
 
 from plotly.subplots import make_subplots
+from torchview import draw_graph
 
 import distances
+import models
 from models import estimate_velocities
 from scipy.stats import multivariate_normal
 
-import models
 
 LABEL_COLORS = ["orange", "green", "red", "purple", "brown", "pink", "cyan", "magenta", "yellow", "lime"]
 
@@ -949,3 +951,34 @@ def plotly_animation_to_mp4(animation, output_path="animation.mp4", fps=20, widt
                 writer.append_data(imageio.imread(p))
 
     print(f"Saved MP4 to: {output_path}")
+
+
+def plot_network(network, coupling_sample, save_filename=None):
+    """Plots the architecture of a PyTorch network using torchview.
+
+    Arguments:
+        network: a PyTorch nn.Module representing the network to visualize.
+        coupling_sample: a sample input tuple to pass through the network for visualization.
+
+    Returns:
+        A torchview Graph object representing the network architecture.
+    """
+
+    sample_input = torch.tensor([coupling_sample[0][0]], dtype=torch.float, requires_grad=False).to("cuda")
+    if len(coupling_sample[0]) > 2:
+        sample_input = (sample_input, torch.tensor([coupling_sample[0][2]], dtype=torch.long, requires_grad=False).to("cuda"))
+
+    model_graph = draw_graph(
+        network,
+        input_data=sample_input,
+        depth=2,                       # controls module-hierarchy detail
+        graph_dir="TB",                # top-to-bottom layout
+        expand_nested=False,
+        hide_inner_tensors=True,
+        hide_module_functions=True,
+        show_shapes=True,
+        save_graph=save_filename is not None,
+        filename=save_filename,
+    )
+
+    return model_graph.visual_graph
