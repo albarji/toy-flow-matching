@@ -964,9 +964,9 @@ def plot_network(network, coupling_sample, save_filename=None):
         A torchview Graph object representing the network architecture.
     """
 
-    sample_input = torch.tensor([coupling_sample[0][0]], dtype=torch.float, requires_grad=False).to("cuda")
+    sample_input = torch.tensor(np.array([coupling_sample[0][0]]), dtype=torch.float, requires_grad=False).to("cuda")
     if len(coupling_sample[0]) > 2:
-        sample_input = (sample_input, torch.tensor([coupling_sample[0][2]], dtype=torch.long, requires_grad=False).to("cuda"))
+        sample_input = (sample_input, torch.tensor(np.array([coupling_sample[0][2]]), dtype=torch.long, requires_grad=False).to("cuda"))
 
     model_graph = draw_graph(
         network,
