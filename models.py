@@ -170,12 +170,9 @@ class FlowUNet(nn.Module):
         for i in range(self.num_blocks):
             x = self.up_transposes[i](x)
             skip_idx = self.num_blocks - 1 - i
-            # if 0 <= skip_idx < self.num_blocks:
-            #     skip = skips[skip_idx]
-                # if x.shape[2:] != skip.shape[2:]:  # handle odd spatial dimensions
-                #     x = nn.functional.interpolate(x, size=skip.shape[2:])
-                # x = torch.cat([x, skip], dim=1)
             skip = skips[skip_idx]
+            if x.shape[2:] != skip.shape[2:]:  # handle odd spatial dimensions
+                x = nn.functional.interpolate(x, size=skip.shape[2:])
             x = torch.cat([x, skip], dim=1)
             x = self.up_convs[i](x)
 
