@@ -1,8 +1,8 @@
 """Module for generating toy data for flow matching experiments."""
 
 import numpy as np
-
-from sklearn.datasets import make_moons, make_swiss_roll
+from datasets import load_dataset
+from sklearn.datasets import load_digits as sklearn_load_digits, make_moons, make_swiss_roll
 
 def generate_two_gaussians(n=1000, supervised=False):
     """Generates a toy dataset consisting of two well-separated Gaussian clusters.
@@ -85,3 +85,29 @@ def load_banana():
     """
     data = np.loadtxt("datasets/banana.csv", delimiter=",")
     return data[:, :2], data[:, 2].astype(int)
+
+def load_digits():
+    """Loads the digits dataset from sklearn.
+
+    Returns:
+        A numpy array of shape (n, 8, 8) containing the digit images.
+        A numpy array of shape (n,) containing the class labels for the digits.
+    """
+    data = sklearn_load_digits()
+    target_data = data.images
+    target_data /= target_data.max()  # Normalize pixel values to [0, 1]
+    target_labels = data.target
+    # Shuffle data and labels together
+    perm = np.random.permutation(len(target_data))
+    return target_data[perm], target_labels[perm]
+
+def load_mnist():
+    """Loads the MNIST dataset from Hugging Face datasets.
+
+    Returns:
+        A numpy array of shape (n, 28, 28) containing the MNIST images.
+        A numpy array of shape (n,) containing the class labels for the MNIST dataset.
+    """
+    ds = load_dataset("ylecun/mnist")
+    train_ds = ds["train"].with_format("numpy").map(lambda x: {"image": x["image"].astype("float32") / 255.0, "label": x["label"]}, batched=True)
+    return train_ds[:]["image"], train_ds[:]["label"]
