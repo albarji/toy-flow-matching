@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from data import FixedCouplingsDataset, couplings_collate_fn
+from torch.utils.data import DataLoader
 
 
 class FlowMLP(nn.Module):
@@ -184,11 +186,6 @@ class FlowUNet(nn.Module):
 
         return x
 
-
-def labels_dictionary(target_labels):
-    labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
-    labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
-    return labels_dict
     
 def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False, 
                      log_frequency=20, train_distilled_network=False):
@@ -196,7 +193,8 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
     
     Arguments:
         couplings: a list of tuples (src_point, tgt_point) representing the known couplings between source and target points,
-            or a list of tuples (src_point, tgt_point, tgt_label) if using supervised labels.
+            or a list of tuples (src_point, tgt_point, tgt_label) if using supervised labels
+            or an instance of AbstractCouplingsDataset.
         num_epochs: the number of training epochs over the couplings to perform.
         batch_size: the number of point pairs to use in each training update.
         learning_rate: the learning rate for the optimizer.
@@ -211,15 +209,11 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
 
     Returns: the trained neural network model.
     """
-    # Prepare training tensors from existing couplings
-    src_tensor = torch.tensor(np.array([coupling[0] for coupling in couplings], dtype=np.float32))
-    tgt_tensor = torch.tensor(np.array([coupling[1] for coupling in couplings], dtype=np.float32))
-    supervised = any(len(coupling) == 3 for coupling in couplings)
-    if supervised:
-        raw_labels = [coupling[2] for coupling in couplings]
-        labels_dict = labels_dictionary(raw_labels)
-        num_labels = len(labels_dict)
-        labels = torch.tensor([labels_dict[label] for label in raw_labels], dtype=torch.int)
+    # Create a FixedCouplingsDataset if couplings is a list of tuples
+    if isinstance(couplings, list):
+        couplings = FixedCouplingsDataset(couplings)
+
+    dataloader = DataLoader(couplings, batch_size=batch_size, shuffle=True, collate_fn=couplings_collate_fn)
 
     # Instantiate model for 2D data
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -227,23 +221,21 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
         network_args = {}
     if network == "mlp":
         model = FlowMLP(
-            input_output_dim=src_tensor.shape[1],
-            embedding_size=embedding_size if supervised else None,
-            num_embeddings=num_labels if supervised else None,
+            input_output_dim=couplings.shape[0],
+            embedding_size=embedding_size if couplings.is_supervised else None,
+            num_embeddings=couplings.num_classes if couplings.is_supervised else None,
             **network_args
         ).to(device)
     elif network == "unet":
         model = FlowUNet(
-            in_channels=src_tensor.shape[1] if src_tensor.ndim == 4 else 1,  # Handle grayscale input for unet
-            embedding_size=embedding_size if supervised else None,
-            num_embeddings=num_labels if supervised else None,
+            in_channels=couplings.shape[0] if len(couplings.shape) == 3 else 1,  # Handle grayscale input for unet
+            embedding_size=embedding_size if couplings.is_supervised else None,
+            num_embeddings=couplings.num_classes if couplings.is_supervised else None,
             **network_args
         ).to(device)
-    src_tensor = src_tensor.to(device)
-    tgt_tensor = tgt_tensor.to(device)
-    if supervised:
-        labels = labels.to(device)
-        model.labels_dict = labels_dict  # Store the labels dictionary in the model for later use
+
+    if couplings.is_supervised:
+        model.labels_dict = couplings.labels_dict  # Store the labels dictionary in the model for later use
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_epochs)
@@ -254,13 +246,12 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
     for epoch in range(num_epochs):
         epoch_loss = 0.0
 
-        for i in range(0, src_tensor.shape[0], batch_size):
-            src_batch = src_tensor[i:i + batch_size]
-            tgt_batch = tgt_tensor[i:i + batch_size]
-            labels_batch = labels[i:i + batch_size] if supervised else None
+        for databatch in dataloader:
+            src_batch, tgt_batch = databatch[0].to(device), databatch[1].to(device)
+            labels_batch = databatch[2].to(device) if couplings.is_supervised else None
 
             # Drop labels with probability labels_drop_rate
-            if supervised and labels_drop_rate > 0:
+            if couplings.is_supervised and labels_drop_rate > 0:
                 mask = torch.rand(labels_batch.shape[0], device=labels_batch.device) < labels_drop_rate
                 labels_batch[mask] = 0  # Use 0 special label 0 to indicate dropped labels
 
@@ -278,7 +269,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
             v_target = tgt_batch - src_batch
 
             # Predict and optimize
-            model_inputs = (x_t, labels_batch) if supervised else (x_t,)
+            model_inputs = (x_t, labels_batch) if couplings.is_supervised else (x_t,)
             v_pred = model(*model_inputs)
             loss = criterion(v_pred, v_target)
 
@@ -289,7 +280,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
             epoch_loss += loss.item() * src_batch.shape[0]
 
         scheduler.step()
-        epoch_loss /= src_tensor.shape[0]
+        epoch_loss /= couplings.num_couplings
         if verbose:
             if (epoch + 1) % log_frequency == 0 or epoch == 0:
                 print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {epoch_loss:.6f}, LR: {scheduler.get_last_lr()[0]:.6f}")
