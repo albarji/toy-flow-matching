@@ -1,6 +1,8 @@
 """Module for generating toy data for flow matching experiments."""
 
+from datasets import load_dataset as hf_load_dataset
 import numpy as np
+from PIL import Image, ImageOps
 import torch
 from sklearn.datasets import load_digits as sklearn_load_digits, make_moons, make_swiss_roll
 from torch.utils.data import Dataset
@@ -122,6 +124,40 @@ def load_mnist():
     labels_set = set(range(10))  # MNIST has 10 classes (digits 0-9)
     return dataset, labels_set
 
+class CatImageDataset(Dataset):
+
+    def __init__(self, image_size: int = 256):
+        self.image_size = image_size
+        hf_dataset = hf_load_dataset("yashikota/cat-image-dataset")["train"]
+        # Preprocess the dataset to ensure images are in RGB format and resized to the specified image size
+        self.dataset = []
+        for row in hf_dataset:
+            image = row["image"]
+            if not isinstance(image, Image.Image):
+                image = Image.fromarray(np.array(image))
+            image = image.convert("RGB")
+            image = ImageOps.fit(image, (self.image_size, self.image_size), method=Image.Resampling.BICUBIC)
+            image_array = np.asarray(image, dtype=np.float32) / 255.0
+            image_array = np.transpose(image_array, (2, 0, 1))
+            self.dataset.append(torch.from_numpy(image_array))
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index: int):
+        return self.dataset[index]
+
+def load_cats(image_size: int = 256):
+    """Loads the cat image dataset from Hugging Face.
+
+    Returns:
+        - A pytorch Dataset containing the cat images.
+            Images are resized to (image_size, image_size) and normalized to [0, 1].
+        - The number of classes in the dataset (None).
+    """
+    dataset = CatImageDataset(image_size=image_size)
+    return dataset, None
+
 class AbstractCouplingsDataset(Dataset):
     """Abstract PyTorch Dataset that wraps a list of couplings between source and target data distributions.
 
@@ -242,7 +278,7 @@ class IndependentDistributionsCouplingsDataset(AbstractCouplingsDataset):
         """
         source = self.source_generator(self.shape)
         target_idx = np.random.choice(len(self.target_dataset))
-        target = self.target_dataset[target_idx][0]
+        target = self.target_dataset[target_idx][0] if self.is_supervised else self.target_dataset[target_idx]
         if self.is_supervised:
             target_label = self.target_dataset[target_idx][1]
             return source, target, target_label
