@@ -95,14 +95,15 @@ def load_digits():
         A numpy array of shape (n, 8, 8) containing the digit images.
         A numpy array of shape (n,) containing the class labels for the digits.
     """
-    # FIXME adapt to pytorch dataset
     data = sklearn_load_digits()
     target_data = data.images
     target_data /= target_data.max()  # Normalize pixel values to [0, 1]
     target_labels = data.target
     # Shuffle data and labels together
     perm = np.random.permutation(len(target_data))
-    return target_data[perm], target_labels[perm]
+    target_data = target_data[perm]
+    target_labels = target_labels[perm]
+    return [(torch.tensor(target_data[i], dtype=torch.float32), target_labels[i]) for i in range(len(target_data))], set(target_labels)
 
 def load_mnist():
     """Loads the MNIST dataset from torchvision.
