@@ -9,5 +9,6 @@ plotly==6.6.0
 POT==0.9.6.post1
 scikit_learn==1.8.0
 streamlit==1.46.0
-torch==2.11.0
+torch==2.12.1
 torchview==0.2.7
+torchvision==0.27.1

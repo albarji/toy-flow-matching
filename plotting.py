@@ -790,37 +790,63 @@ def plot_density_map(reversed_mesh_trajectories, target_data, source_pdf=None, m
 
     return fig
 
-def plot_image_grid(data, labels, samples_per_label=10):
-    """Plots a grid of images from the data, grouped by their labels.  Assumes data is of shape (N, H, W) and labels is of shape (N,).
+def plot_image_grid(dataset, samples_per_label=10):
+    """Plots a grid of images from a PyTorch dataset, grouped by label.
 
-    Aruments:
-        data: numpy array of shape (N, H, W) representing the image data points
-        labels: numpy array of shape (N,) representing the class labels for each image
-        samples_per_label: number of images to display for each label (default: 10)
+    The dataset is expected to return (image, label) for each index. Images are
+    streamed from the dataset and only selected samples are kept, to avoid
+    loading the full dataset in memory.
+
+    Arguments:
+        dataset: PyTorch Dataset where dataset[idx] returns (image, label).
+        samples_per_label: number of images to display for each label.
 
     Returns:
         A Plotly Figure object visualizing the image grid.
     """
+    if len(dataset) == 0:
+        raise ValueError("dataset must contain at least one sample")
 
-    import plotly.graph_objects as go
+    def _image_to_2d_array(image):
+        if not isinstance(image, torch.Tensor):
+            raise ValueError("Each image must be a torch.Tensor")
 
-    unique_labels = np.unique(labels)
-    n_cols = 10
+        # Expected grayscale formats: (H, W) or (1, H, W)
+        if image.ndim == 3 and image.shape[0] == 1:
+            image = image[0]
+        elif image.ndim != 2:
+            raise ValueError(f"Unsupported image shape: {tuple(image.shape)}; expected (H, W) or (1, H, W)")
+
+        return image.numpy()
+
+    # Stream over dataset once and keep only selected sample indices per label.
+    sample_indices_by_label = {}
+    for idx in range(len(dataset)):
+        _, label = dataset[idx]
+        sample_indices_by_label.setdefault(label, [])
+        if len(sample_indices_by_label[label]) < samples_per_label:
+            sample_indices_by_label[label].append(idx)
+
+    unique_labels = sorted(sample_indices_by_label.keys())
+    n_cols = samples_per_label
     n_rows = len(unique_labels)
 
     fig = make_subplots(
         rows=n_rows,
         cols=n_cols,
         horizontal_spacing=0.005,
-        vertical_spacing=0.02
+        vertical_spacing=0.02,
     )
 
     for r, label in enumerate(unique_labels, start=1):
-        sample_idx = np.where(labels == label)[0][:samples_per_label]  # 10 different samples for this label
-        for c, idx in enumerate(sample_idx, start=1):
+        sample_indices = sample_indices_by_label[label]
+        for c, idx in enumerate(sample_indices, start=1):
+            image, _ = dataset[idx]
+            image_2d = _image_to_2d_array(image)
+
             fig.add_trace(
                 go.Heatmap(
-                    z=data[idx],
+                    z=image_2d,
                     colorscale="gray",
                     showscale=False,
                     hovertemplate=f"label={label}<br>sample_index={idx}<extra></extra>",
@@ -836,16 +862,16 @@ def plot_image_grid(data, labels, samples_per_label=10):
             yref="paper",
             x=-0.02,
             y=1 - (r - 0.5) / n_rows,
-            text=f"Digit {label}",
+            text=f"Label {label}",
             showarrow=False,
             xanchor="right",
             font=dict(size=12),
         )
 
     fig.update_layout(
-        title="MNIST-like digits: 10 samples per label",
+        title=f"MNIST-like digits: up to {samples_per_label} samples per label",
         width=1100,
-        height=1100,
+        height=110 * max(10, n_rows),
         margin=dict(l=90, r=20, t=60, b=20),
     )
 

@@ -2,9 +2,9 @@
 
 import numpy as np
 import torch
-from datasets import load_dataset
 from sklearn.datasets import load_digits as sklearn_load_digits, make_moons, make_swiss_roll
 from torch.utils.data import Dataset
+from torchvision import datasets, transforms
 
 def generate_two_gaussians(n=1000, supervised=False):
     """Generates a toy dataset consisting of two well-separated Gaussian clusters.
@@ -95,6 +95,7 @@ def load_digits():
         A numpy array of shape (n, 8, 8) containing the digit images.
         A numpy array of shape (n,) containing the class labels for the digits.
     """
+    # FIXME adapt to pytorch dataset
     data = sklearn_load_digits()
     target_data = data.images
     target_data /= target_data.max()  # Normalize pixel values to [0, 1]
@@ -104,28 +105,21 @@ def load_digits():
     return target_data[perm], target_labels[perm]
 
 def load_mnist():
-    """Loads the MNIST dataset from Hugging Face datasets.
+    """Loads the MNIST dataset from torchvision.
 
     Returns:
-        A numpy array of shape (n, 28, 28) containing the MNIST images.
-        A numpy array of shape (n,) containing the class labels for the MNIST dataset.
+        - A pytorch Dataset containing the MNIST images and labels.
+            Images are 28x28 with pixel values normalized to [0, 1] and labels are integers from 0 to 9.
+        - The number of classes in the dataset (10 for MNIST).
     """
-    ds = load_dataset("ylecun/mnist")
-    train_ds = ds["train"].with_format("numpy").map(lambda x: {"image": x["image"].astype("float32") / 255.0, "label": x["label"]}, batched=True)
-    return train_ds[:]["image"], train_ds[:]["label"]
-
-def labels_dictionary(target_labels):
-    """Creates a dictionary mapping each unique label in target_labels to a unique integer index.
-
-    Arguments:
-        target_labels: a list or array of labels.
-
-    Returns:
-        A dictionary mapping each unique label to a unique integer index, with None mapped to 0 for the special case of dropped labels (flow without label conditioning).
-    """
-    labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
-    labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
-    return labels_dict
+    dataset = datasets.MNIST(
+        root="/tmp/mnist_data",
+        train=True,
+        download=True,
+        transform=transforms.ToTensor()
+    )
+    labels_set = set(range(10))  # MNIST has 10 classes (digits 0-9)
+    return dataset, labels_set
 
 class AbstractCouplingsDataset(Dataset):
     """Abstract PyTorch Dataset that wraps a list of couplings between source and target data distributions.
@@ -133,7 +127,7 @@ class AbstractCouplingsDataset(Dataset):
     Couplings might not be stored in memory, but generated on-the-fly to allow for larger-than-memory datasets.
     Each coupling is a tuple (src_point, tgt_point) or (src_point, tgt_point, tgt_label) if using supervised labels.
 
-    Inheriging classes must implement the __getitem__ method to retrieve a coupling for a given index.
+    Inheriting classes must implement the __getitem__ method to retrieve a coupling for a given index.
     Optionally they can implement the __getitems__ method to retrieve multiple couplings for a given list of indices, which can be more efficient than calling __getitem__ multiple times.
     """
 
@@ -147,7 +141,7 @@ class AbstractCouplingsDataset(Dataset):
         """
         self.num_couplings = num_couplings
         self.shape = shape
-        self.labels_dict = labels_dictionary(labels_set) if labels_set is not None else None
+        self.labels_set = labels_set
 
     def __len__(self):
         return self.num_couplings
@@ -155,12 +149,12 @@ class AbstractCouplingsDataset(Dataset):
     @property
     def is_supervised(self):
         """Returns True if the dataset is supervised (i.e., has labels), False otherwise."""
-        return self.labels_dict is not None
+        return self.labels_set is not None
     
     @property
     def num_classes(self):
         """Returns the number of classes in the dataset, or None if the dataset is unsupervised."""
-        return len(self.labels_dict) if self.is_supervised else None
+        return len(self.labels_set) if self.is_supervised else None
 
 class FixedCouplingsDataset(AbstractCouplingsDataset):
     """A PyTorch Dataset that wraps a fixed list of couplings between source and target data distributions."""
@@ -185,8 +179,7 @@ class FixedCouplingsDataset(AbstractCouplingsDataset):
         self.src_tensor = torch.tensor(np.array([coupling[0] for coupling in couplings], dtype=np.float32))
         self.tgt_tensor = torch.tensor(np.array([coupling[1] for coupling in couplings], dtype=np.float32))
         if supervised:
-            raw_labels = [coupling[2] for coupling in couplings]
-            self.labels = torch.tensor([self.labels_dict[label] for label in raw_labels], dtype=torch.int)
+            self.labels = np.array([coupling[2] for coupling in couplings])
     
     def __getitem__(self, idx):
         """Retrieves a coupling (src_point, tgt_point) or (src_point, tgt_point, tgt_label) for a given index.
@@ -209,55 +202,50 @@ class FixedCouplingsDataset(AbstractCouplingsDataset):
             return src_point, tgt_point, tgt_label
         return src_point, tgt_point
 
-# class IndependentDistributionsCouplingsDataset(FunctionalCouplingsDataset):
-#     """A PyTorch Dataset that generates independent couplings between given source and target data distributions.
+class IndependentDistributionsCouplingsDataset(AbstractCouplingsDataset):
+    """A PyTorch Dataset that generates independent couplings between a given target dataset and random samples.
 
-#     A given index is guaranteed to always return the same coupling.
+    Querying the same index multiple times will yield different couplings.
 
-#     Attributes:
-#         source_data: numpy array of shape (n, d) containing the source data points.
-#         target_data: numpy array of shape (n, d) containing the target data points.
-#         target_labels: optional numpy array of shape (n,) containing the class labels for the target data.
-#         num_couplings: size of the dataset, i.e., the number of independent couplings to generate (default: 10000).
-#     """
+    Attributes:
+        target_data: Dataset containing the target data points.
+        target_labels: optional numpy array of shape (n,) containing the class labels for the target data.
+        num_couplings: size of the dataset, i.e., the number of independent couplings to generate (default: 10000).
+    """
 
-#     def __init__(self, source_data, target_data, target_labels=None, num_couplings=10000):
-#         """Initializes the IndependentDistributionsCouplingsDataset.
+    def __init__(self, target_dataset, num_couplings, labels_set=None, source_generator=None):
+        """Initializes the IndependentDistributionsCouplingsDataset.
 
-#         Arguments:
-#             source_data: numpy array of shape (n, d) containing the source data points.
-#             target_data: numpy array of shape (n, d) containing the target data points.
-#             target_labels: optional numpy array of shape (n,) containing the class labels for the target data.
-#             num_couplings: number of independent couplings to generate (default: 10000).
-#             num_classes: number of classes in the dataset (default: None, unsupervised dataset).
-#         """
-#         self.source_data = source_data
-#         self.target_data = target_data
-#         self.target_labels = target_labels
-#         self.source_indexes = np.random.randint(0, self.source_data.shape[0], size=num_couplings)
-#         self.target_indexes = np.random.randint(0, self.target_data.shape[0], size=num_couplings)
-#         self.labels_indices = np.random.randint(0, self.target_labels.shape[0], size=num_couplings) if target_labels is not None else None
+        Arguments:
+            target_dataset: Dataset containing the target data points.
+            labels_set: optional set containing the class labels for the target data.
+            num_couplings: number of independent couplings to generate.
+            source_generator: optional function to generate source data points. If not provided, use a standard normal distribution generator.
+        """
+        self.target_dataset = target_dataset
+        self.labels_set = labels_set
+        self.shape = target_dataset[0][0].shape if isinstance(target_dataset[0], tuple) else target_dataset[0].shape
+        self.source_generator = source_generator if source_generator is not None else lambda shape: torch.randn(*shape)
 
-#         super().__init__(
-#             coupling_generator=self._coupling_generator, 
-#             num_couplings=num_couplings, 
-#             shape=source_data.shape[1:],
-#             labels_set=set(target_labels) if target_labels is not None else None,
-#         )
+        super().__init__(
+            self.shape,
+            num_couplings,
+            labels_set=labels_set
+        )
 
-#     def _coupling_generator(self, idx):
-#         """Generates a coupling (src_point, tgt_point) or (src_point, tgt_point, tgt_label) for a given index.
+    def __getitem__(self, _idx):
+        """Retrieves a coupling (src_point, tgt_point) or (src_point, tgt_point, tgt_label) for a given index.
 
-#         Arguments:
-#             idx: index of the coupling to generate.
-#         """
-#         src_idx = self.source_indexes[idx]
-#         tgt_idx = self.target_indexes[idx]
-#         coupling = (self.source_data[src_idx], self.target_data[tgt_idx])
-#         if self.is_supervised:
-#             tgt_label = self.target_labels[tgt_idx]
-#             coupling = (coupling[0], coupling[1], tgt_label)
-#         return coupling
+        Arguments:
+            _idx: index of the coupling to retrieve. Ignored since couplings are generated independently and randomly.
+        """
+        source = self.source_generator(self.shape)
+        target_idx = np.random.choice(len(self.target_dataset))
+        target = self.target_dataset[target_idx][0]
+        if self.is_supervised:
+            target_label = self.target_dataset[target_idx][1]
+            return source, target, target_label
+        return source, target
 
 def couplings_collate_fn(batch):
     """Collate function for batching couplings in a PyTorch DataLoader.
@@ -275,6 +263,6 @@ def couplings_collate_fn(batch):
     src_points = torch.stack([item[0] for item in batch])
     tgt_points = torch.stack([item[1] for item in batch])
     if len(batch[0]) == 3:  # Supervised case
-        tgt_labels = torch.tensor([item[2] for item in batch], dtype=torch.int)
+        tgt_labels = np.array([item[2] for item in batch])
         return src_points, tgt_points, tgt_labels
     return src_points, tgt_points

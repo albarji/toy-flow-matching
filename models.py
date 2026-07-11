@@ -145,6 +145,7 @@ class FlowUNet(nn.Module):
             labels: Optional tensor of shape (N,) with integer class indices, or None.
         """
         # Handle grayscale input by adding a channel dimension
+        xorig = x
         if x.ndim == 3:
             x = x.unsqueeze(1)  # (N, 1, H, W)
 
@@ -181,11 +182,23 @@ class FlowUNet(nn.Module):
         x = self.final_conv(x)
 
         # Remove channel dimension if input was grayscale
-        if x.shape[1] == 1:
+        if xorig.ndim == 3:
             x = x.squeeze(1)
 
         return x
 
+def labels_dictionary(target_labels):
+    """Creates a dictionary mapping each unique label in target_labels to a unique integer index.
+
+    Arguments:
+        target_labels: a list or array of labels.
+
+    Returns:
+        A dictionary mapping each unique label to a unique integer index, with None mapped to 0 for the special case of dropped labels (flow without label conditioning).
+    """
+    labels_dict = {None: 0}  # Add None as a special label for dropped labels (flow without label conditioning)
+    labels_dict.update({label: i+1 for i, label in enumerate(sorted(set(target_labels)))})
+    return labels_dict
     
 def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1e-3, embedding_size=64, labels_drop_rate=0.1, network="mlp", network_args=None, verbose=False, 
                      log_frequency=20, train_distilled_network=False):
@@ -217,25 +230,26 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
 
     # Instantiate model for 2D data
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_classes = couplings.num_classes+1 if couplings.is_supervised else None  # Extra class for no guidance
     if network_args is None:
         network_args = {}
     if network == "mlp":
         model = FlowMLP(
             input_output_dim=couplings.shape[0],
             embedding_size=embedding_size if couplings.is_supervised else None,
-            num_embeddings=couplings.num_classes if couplings.is_supervised else None,
+            num_embeddings=num_classes,
             **network_args
         ).to(device)
     elif network == "unet":
         model = FlowUNet(
             in_channels=couplings.shape[0] if len(couplings.shape) == 3 else 1,  # Handle grayscale input for unet
             embedding_size=embedding_size if couplings.is_supervised else None,
-            num_embeddings=couplings.num_classes if couplings.is_supervised else None,
+            num_embeddings=num_classes,
             **network_args
         ).to(device)
 
     if couplings.is_supervised:
-        model.labels_dict = couplings.labels_dict  # Store the labels dictionary in the model for later use
+        model.labels_dict = labels_dictionary(couplings.labels_set)  # Store the labels dictionary in the model for later use
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.01, total_iters=num_epochs)
@@ -248,7 +262,7 @@ def train_flow_model(couplings, num_epochs=200, batch_size=2048, learning_rate=1
 
         for databatch in dataloader:
             src_batch, tgt_batch = databatch[0].to(device), databatch[1].to(device)
-            labels_batch = databatch[2].to(device) if couplings.is_supervised else None
+            labels_batch = torch.tensor([model.labels_dict[label] for label in databatch[2]], dtype=torch.int).to(device) if couplings.is_supervised else None
 
             # Drop labels with probability labels_drop_rate
             if couplings.is_supervised and labels_drop_rate > 0:
@@ -350,12 +364,14 @@ def euler_integrate(initial_points, velocity_fn, n_steps):
 
     return path
 
-def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, reverse=False, labels=None):
+def compute_trajectories(model, source_data_or_generator, n_generations=None, n_steps=100, batch_size=2048, reverse=False, labels=None):
     """Computes trajectories of points from the source distribution under the learned flow model.
 
     Arguments:
         model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
-        source_data: numpy array of shape (N, *) representing the source distribution points
+        source_data_or_generator: numpy array of shape (N, *) representing the source distribution points
+            or a callable that receives a number of points to generate and returns a numpy array of shape (N, *) representing the source distribution points.
+        n_generations: the number of trajectories to generate. If source_data_or_generator is a numpy array, ignore this number and use the number of points in the array instead.
         n_steps: the number of integration steps to use for computing trajectories.
             Fewer steps means faster but less accurate trajectories.
         batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
@@ -365,21 +381,87 @@ def compute_trajectories(model, source_data, n_steps=100, batch_size=2048, rever
     Returns:
         A list of trajectories, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
     """
-    trajectories = []
-    for i in range(0, source_data.shape[0], batch_size):
-        batch_points = source_data[i:i + batch_size]
-        model_kwargs = {}
-        if labels is not None:
-            model_kwargs['labels'] = labels[i:i + batch_size]
-        if reverse:
-            trajectories_batch = euler_integrate(batch_points, lambda x: -estimate_velocities(model, x, **model_kwargs), n_steps)
-        else:
-            trajectories_batch = euler_integrate(batch_points, lambda x: estimate_velocities(model, x, **model_kwargs), n_steps)
-        ts, points = zip(*trajectories_batch)
-        for data_idx in range(len(batch_points)):
-            trajectories.append([(ts[t], points[t][data_idx]) for t in range(n_steps + 1)])
+    return list(generate_trajectories(model, source_data_or_generator, n_generations=n_generations, n_steps=n_steps, batch_size=batch_size, reverse=reverse, labels=labels))
 
-    return trajectories
+def generate_trajectories(model, source_data_or_generator, n_generations=None, n_steps=100, batch_size=2048, reverse=False, labels=None):
+    """Yields trajectories of points from the source distribution under the learned flow model.
+
+    Arguments:
+        model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
+        source_data_or_generator: numpy array of shape (N, *) representing the source distribution points
+            or a callable that receives a number of points to generate and returns a numpy array of shape (N, *) representing the source distribution points.
+        n_generations: the number of trajectories to generate. If source_data_or_generator is a numpy array, ignore this number and use the number of points in the array instead.
+        n_steps: the number of integration steps to use for computing trajectories.
+            Fewer steps means faster but less accurate trajectories.
+        batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
+        reverse: if True, integrates backward from target to source instead of forward from source to target.
+        labels: optional integer array of shape (N,) representing the labels for which to estimate velocities (if the model is conditional).
+
+    Yields:
+        Trajectories of points, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
+    """
+    if not callable(source_data_or_generator):
+        n_generations = source_data_or_generator.shape[0]
+    elif n_generations is None:
+        raise ValueError("If source_data_or_generator is a callable, n_generations must be provided.")
+
+    for i in range(0, n_generations, batch_size):
+        batch_input = source_data_or_generator[i:i + batch_size] if not callable(source_data_or_generator) else source_data_or_generator
+        for trajectory in generate_trajectories_batch(model, batch_input, n_generations=batch_input.shape[0], n_steps=n_steps, reverse=reverse, labels=labels[i:i + batch_size] if labels is not None else None):
+            yield trajectory
+
+def generate_trajectories_batch(model, source_data_or_generator, n_generations, n_steps=100, reverse=False, labels=None):
+    """Yields trajectories of points from the source distribution under the learned flow model.
+
+    Arguments:
+        model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
+        source_data_or_generator: numpy array of shape (N, *) representing the source distribution points,
+            or a callable that receives a number of points to generate and returns a numpy array of shape (N, *) representing the source distribution points.
+        n_generations: the number of trajectories to generate. If source_data_or_generator is a numpy array, ignore this number and use the number of points in the array instead.
+        n_steps: the number of integration steps to use for computing trajectories.
+            Fewer steps means faster but less accurate trajectories.
+        reverse: if True, integrates backward from target to source instead of forward from source to target.
+        labels: optional integer array of shape (N,) representing the labels for which to estimate velocities (if the model is conditional).
+
+    Yields:
+        Trajectories of points, where each trajectory is a list of (t, point) tuples representing the path of a point from t=0 to t=1 under the flow model.
+    """
+    if callable(source_data_or_generator):
+        source_data = source_data_or_generator(n_generations)
+    else:
+        source_data = source_data_or_generator
+        n_generations = source_data.shape[0]
+
+    model_kwargs = {}
+    if labels is not None:
+        model_kwargs['labels'] = labels
+    if reverse:
+        trajectories_batch = euler_integrate(source_data, lambda x: -estimate_velocities(model, x, **model_kwargs), n_steps)
+    else:
+        trajectories_batch = euler_integrate(source_data, lambda x: estimate_velocities(model, x, **model_kwargs), n_steps)
+    ts, points = zip(*trajectories_batch)
+    for data_idx in range(len(source_data)):
+        yield [(ts[t], points[t][data_idx]) for t in range(n_steps + 1)]
+
+def yield_samples_from_flow(model, source_data_or_generator, n_generations=None, n_steps=100, batch_size=2048, reverse=False, labels=None):
+    """Yields samples from the target distribution by flowing source points through the learned flow model.
+
+    Arguments:
+        model: the trained flow model that takes in a tensor of shape (N, *) and returns a tensor of shape (N, *) representing the velocity vectors.
+        source_data_or_generator: numpy array of shape (N, *) representing the source distribution points,
+            or a callable that receives a number of points to generate and returns a numpy array of shape (N, *) representing the source distribution points.
+        n_generations: the number of samples to generate if source_data_or_generator is a callable. Ignored if source_data_or_generator is a numpy array.
+        n_steps: the number of integration steps to use for computing trajectories.
+            Fewer steps means faster but less accurate trajectories.
+        batch_size: the number of points to process in each batch when estimating velocities (for GPU efficiency).
+        reverse: if True, integrates backward from target to source instead of forward from source to target.
+        labels: optional integer array of shape (N,) representing the labels for which to estimate velocities (if the model is conditional).
+
+    Yields:
+        Samples from the target distribution, where each sample is a point obtained by flowing a source point through the learned flow model.
+    """
+    for trajectory in generate_trajectories(model, source_data_or_generator, n_generations=n_generations, n_steps=n_steps, batch_size=batch_size, reverse=reverse, labels=labels):
+        yield trajectory[-1][1]  # Yield the final point in the trajectory
 
 def reflow(couplings, model_arguments=None, simulation_arguments=None, source_data_generator=None):
     """Generates new couplings by learning a flow model between the source and target distributions and then flowing the source points through the learned velocity field.
@@ -388,7 +470,7 @@ def reflow(couplings, model_arguments=None, simulation_arguments=None, source_da
         couplings: list of (source, target) tuples representing the initial couplings, or list of (source, target, label) tuples if using supervised labels.
         model_arguments: dictionary of arguments to pass to the model during training (e.g. embedding size, network architecture).
         simulation_arguments: dictionary of arguments to pass to the trajectory simulation (e.g. n_steps, batch_size).
-        source_data_generator: optional function to generate source data if not using the couplings directly. Should return a numpy array of shape (N, *).
+        source_data_generator: callable that receives a number of points to generate and returns a numpy array of shape (N, *) representing the source distribution points.
             If None, generate points from a gaussian distribution following the shape of the source points in the couplings.
 
     Returns:
@@ -399,6 +481,9 @@ def reflow(couplings, model_arguments=None, simulation_arguments=None, source_da
 
     # Train flow model on couplings
     model = train_flow_model(couplings, **(model_arguments or {}))
+
+    # TODO: generate samples on the fly and write to tmp disk a dataset of the generated couplings, then load it as a FixedCouplingsDataset.
+
     # Generate new data from source distribution
     if source_data_generator is not None:
         source_data = source_data_generator()
