@@ -790,7 +790,102 @@ def plot_density_map(reversed_mesh_trajectories, target_data, source_pdf=None, m
 
     return fig
 
-def plot_image_grid(dataset, samples_per_label=10):
+def _image_to_array_for_grid_plot(image):
+    """Converts a PyTorch tensor image to a numpy array suitable for plotting in a grid."""
+    if not isinstance(image, torch.Tensor):
+        raise ValueError("Each image must be a torch.Tensor")
+
+    # Supported formats: grayscale (H, W)/(1, H, W), RGB (3, H, W)/(H, W, 3)
+    if image.ndim == 3 and image.shape[0] == 1:
+        image = image[0]
+    elif image.ndim == 3 and image.shape[0] == 3:
+        # Convert CHW RGB to HWC RGB for color image plotting.
+        image = image.permute(1, 2, 0)
+    elif image.ndim == 3 and image.shape[2] == 3:
+        pass
+    elif image.ndim != 2:
+        raise ValueError(
+            f"Unsupported image shape: {tuple(image.shape)}; expected (H, W), (1, H, W), (3, H, W), or (H, W, 3)"
+        )
+
+    image = image.detach().cpu().float().numpy()
+
+    if image.ndim == 3 and image.shape[2] == 3:
+        # go.Image expects uint8-like RGB values for consistent rendering.
+        image = np.clip(image * 255.0, 0, 255).astype(np.uint8)
+
+    return image
+
+
+def _add_grid_image_trace(fig, image_array, row, col, hovertemplate):
+    """Adds an image trace to the specified subplot in the figure."""
+    if image_array.ndim == 3 and image_array.shape[2] == 3:
+        fig.add_trace(
+            go.Image(
+                z=image_array,
+                hovertemplate=hovertemplate,
+            ),
+            row=row,
+            col=col,
+        )
+    else:
+        fig.add_trace(
+            go.Heatmap(
+                z=image_array,
+                colorscale="gray",
+                zmin=0.0,
+                zmax=1.0,
+                showscale=False,
+                hovertemplate=hovertemplate,
+            ),
+            row=row,
+            col=col,
+        )
+    fig.update_xaxes(showticklabels=False, row=row, col=col)
+    fig.update_yaxes(showticklabels=False, autorange="reversed", row=row, col=col)
+
+
+def _plot_image_grid_from_indices(dataset, row_indices, n_cols, title, left_margin, hover_template_fn, row_annotations=None):
+    """Plots a grid of images from a PyTorch dataset given specific row indices."""
+    n_rows = len(row_indices)
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        horizontal_spacing=0.005,
+        vertical_spacing=0.02,
+    )
+
+    for r, indices in enumerate(row_indices, start=1):
+        for c, idx in enumerate(indices, start=1):
+            image_data = dataset[idx]
+            image = image_data[0] if isinstance(image_data, tuple) else image_data
+            image_array = _image_to_array_for_grid_plot(image)
+            hovertemplate = hover_template_fn(r - 1, idx)
+            _add_grid_image_trace(fig, image_array, r, c, hovertemplate)
+
+        if row_annotations is not None:
+            fig.add_annotation(
+                xref="paper",
+                yref="paper",
+                x=-0.02,
+                y=1 - (r - 0.5) / n_rows,
+                text=row_annotations[r - 1],
+                showarrow=False,
+                xanchor="right",
+                font=dict(size=12),
+            )
+
+    fig.update_layout(
+        title=title,
+        width=1100,
+        height=110 * max(10, n_rows),
+        margin=dict(l=left_margin, r=20, t=60, b=20),
+    )
+
+    return fig
+
+
+def plot_labeled_image_grid(dataset, samples_per_label=10):
     """Plots a grid of images from a PyTorch dataset, grouped by label.
 
     The dataset is expected to return (image, label) for each index. Images are
@@ -807,19 +902,6 @@ def plot_image_grid(dataset, samples_per_label=10):
     if len(dataset) == 0:
         raise ValueError("dataset must contain at least one sample")
 
-    def _image_to_2d_array(image):
-        if not isinstance(image, torch.Tensor):
-            raise ValueError("Each image must be a torch.Tensor")
-
-        # Expected grayscale formats: (H, W) or (1, H, W)
-        if image.ndim == 3 and image.shape[0] == 1:
-            image = image[0]
-        elif image.ndim != 2:
-            raise ValueError(f"Unsupported image shape: {tuple(image.shape)}; expected (H, W) or (1, H, W)")
-
-        return image.numpy()
-
-    # Stream over dataset once and keep only selected sample indices per label.
     sample_indices_by_label = {}
     for idx in range(len(dataset)):
         _, label = dataset[idx]
@@ -828,54 +910,82 @@ def plot_image_grid(dataset, samples_per_label=10):
             sample_indices_by_label[label].append(idx)
 
     unique_labels = sorted(sample_indices_by_label.keys())
-    n_cols = samples_per_label
-    n_rows = len(unique_labels)
+    row_indices = [sample_indices_by_label[label] for label in unique_labels]
+    row_annotations = [f"Label {label}" for label in unique_labels]
 
-    fig = make_subplots(
-        rows=n_rows,
-        cols=n_cols,
-        horizontal_spacing=0.005,
-        vertical_spacing=0.02,
+    return _plot_image_grid_from_indices(
+        dataset=dataset,
+        row_indices=row_indices,
+        n_cols=samples_per_label,
+        title=f"Labeled image dataset: up to {samples_per_label} samples per label",
+        left_margin=90,
+        hover_template_fn=lambda row_idx, sample_idx: f"label={unique_labels[row_idx]}<br>sample_index={sample_idx}<extra></extra>",
+        row_annotations=row_annotations,
     )
 
-    for r, label in enumerate(unique_labels, start=1):
-        sample_indices = sample_indices_by_label[label]
-        for c, idx in enumerate(sample_indices, start=1):
-            image, _ = dataset[idx]
-            image_2d = _image_to_2d_array(image)
 
-            fig.add_trace(
-                go.Heatmap(
-                    z=image_2d,
-                    colorscale="gray",
-                    showscale=False,
-                    hovertemplate=f"label={label}<br>sample_index={idx}<extra></extra>",
-                ),
-                row=r,
-                col=c,
-            )
-            fig.update_xaxes(showticklabels=False, row=r, col=c)
-            fig.update_yaxes(showticklabels=False, autorange="reversed", row=r, col=c)
+def plot_unlabeled_image_grid(dataset, grid_size=10):
+    """Plots a square grid of images from a PyTorch dataset without labels.
 
-        fig.add_annotation(
-            xref="paper",
-            yref="paper",
-            x=-0.02,
-            y=1 - (r - 0.5) / n_rows,
-            text=f"Label {label}",
-            showarrow=False,
-            xanchor="right",
-            font=dict(size=12),
+    The dataset is expected to return only an image tensor for each index. The
+    function streams over the dataset and keeps only the first selected sample
+    indices needed to populate the square grid.
+
+    Arguments:
+        dataset: PyTorch Dataset where dataset[idx] returns an image tensor.
+        grid_size: number of rows/columns in the output grid.
+
+    Returns:
+        A Plotly Figure object visualizing the image grid.
+    """
+    if len(dataset) == 0:
+        raise ValueError("dataset must contain at least one sample")
+    if grid_size <= 0:
+        raise ValueError("grid_size must be a positive integer")
+
+    n_images = grid_size * grid_size
+    selected_indices = []
+    for idx in range(len(dataset)):
+        selected_indices.append(idx)
+        if len(selected_indices) == n_images:
+            break
+
+    if len(selected_indices) < n_images:
+        raise ValueError(
+            f"dataset must contain at least {n_images} samples to fill a {grid_size}x{grid_size} grid"
         )
 
-    fig.update_layout(
-        title=f"MNIST-like digits: up to {samples_per_label} samples per label",
-        width=1100,
-        height=110 * max(10, n_rows),
-        margin=dict(l=90, r=20, t=60, b=20),
+    row_indices = [selected_indices[r * grid_size : (r + 1) * grid_size] for r in range(grid_size)]
+
+    return _plot_image_grid_from_indices(
+        dataset=dataset,
+        row_indices=row_indices,
+        n_cols=grid_size,
+        title=f"Image dataset: {grid_size}x{grid_size} samples",
+        left_margin=20,
+        hover_template_fn=lambda _row_idx, sample_idx: f"sample_index={sample_idx}<extra></extra>",
     )
 
-    return fig
+def plot_image_grid(dataset):
+    """Plots a grid of images from a PyTorch dataset, automatically determining whether the dataset is labeled or unlabeled.
+
+    The function checks the output of the dataset to determine if it returns (image, label) tuples or just image tensors. It then calls the appropriate plotting function.
+
+    Arguments:
+        dataset: PyTorch Dataset where dataset[idx] returns either (image, label) or just an image tensor.
+    """
+    if len(dataset) == 0:
+        raise ValueError("dataset must contain at least one sample")
+
+    first_sample = dataset[0]
+    if isinstance(first_sample, tuple) and len(first_sample) == 2:
+        return plot_labeled_image_grid(dataset)
+    elif isinstance(first_sample, torch.Tensor):
+        return plot_unlabeled_image_grid(dataset)
+    else:
+        raise ValueError(
+            "dataset must return either (image, label) tuples or just image tensors"
+        )
 
 
 def plot_euler_steps_vs_wasserstein_distance(networks, source_data, target_data, min_steps=1, max_steps=50, num_steps=25):
