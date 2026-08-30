@@ -1089,7 +1089,7 @@ def plotly_animation_to_mp4(animation, output_path="animation.mp4", fps=20, widt
     print(f"Saved MP4 to: {output_path}")
 
 
-def plot_network(network, coupling_sample, save_filename=None):
+def plot_network(network, coupling_sample, save_filename=None, dpi="96"):
     """Plots the architecture of a PyTorch network using torchview.
 
     Arguments:
@@ -1113,8 +1113,16 @@ def plot_network(network, coupling_sample, save_filename=None):
         hide_inner_tensors=True,
         hide_module_functions=True,
         show_shapes=True,
-        save_graph=save_filename is not None,
-        filename=save_filename,
+        save_graph=False,
     )
+
+    model_graph.visual_graph.graph_attr["dpi"] = dpi
+
+    if save_filename is not None:
+        model_graph.visual_graph.render(
+            filename=save_filename,
+            format="png",
+            cleanup=True,
+        )
 
     return model_graph.visual_graph
