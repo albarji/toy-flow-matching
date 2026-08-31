@@ -988,6 +988,195 @@ def plot_image_grid(dataset):
         )
 
 
+def animate_image_trajectories(
+    trajectories,
+    labels=None,
+    max_trajectories=100,
+    grid_size=10,
+    frame_duration=100,
+    draw_controls=True,
+    title="Generated image trajectories",
+):
+    """Animate image-valued flow trajectories in a grid.
+
+    Each animation frame displays one integration step, from the initial noise
+    to the generated images.  For supervised trajectories, rows correspond to
+    classes and columns to samples within a class.  Unsupervised trajectories
+    are displayed in a square grid, like :func:`plot_image_grid`.
+
+    Arguments:
+        trajectories: list returned by :func:`models.compute_trajectories`.
+            Every trajectory must contain the same number of ``(t, image)``
+            pairs. Images may be NumPy arrays or PyTorch tensors in ``HW``,
+            ``CHW`` or ``HWC`` format.
+        labels: optional array-like with one class label per trajectory.
+        max_trajectories: maximum number of trajectories to display.
+        grid_size: maximum number of rows and columns for unlabeled data.
+        frame_duration: duration of each animation frame in milliseconds.
+        draw_controls: whether to show the play/pause buttons and step slider.
+        title: figure title.
+
+    Returns:
+        A Plotly Figure containing the animation.
+    """
+    if not trajectories:
+        raise ValueError("trajectories must contain at least one trajectory")
+    if max_trajectories < 1:
+        raise ValueError("max_trajectories must be a positive integer")
+    if grid_size < 1:
+        raise ValueError("grid_size must be a positive integer")
+    if frame_duration < 0:
+        raise ValueError("frame_duration must be non-negative")
+
+    all_trajectories = list(trajectories)
+    if labels is not None and len(labels) != len(all_trajectories):
+        raise ValueError("labels must have the same length as trajectories")
+
+    trajectories = all_trajectories[:max_trajectories]
+    labels = None if labels is None else list(labels)[:max_trajectories]
+    n_steps = len(trajectories[0])
+    if n_steps == 0:
+        raise ValueError("trajectories must contain at least one step")
+    if any(len(trajectory) != n_steps for trajectory in trajectories):
+        raise ValueError("all trajectories must contain the same number of steps")
+
+    def prepare_image(image):
+        if isinstance(image, torch.Tensor):
+            image = image.detach().cpu().float().numpy()
+        else:
+            image = np.asarray(image, dtype=np.float32)
+        if image.ndim == 3 and image.shape[0] in (1, 3):
+            image = np.moveaxis(image, 0, -1)
+        if image.ndim == 3 and image.shape[-1] == 1:
+            image = image[..., 0]
+        if image.ndim not in (2, 3) or (image.ndim == 3 and image.shape[-1] != 3):
+            raise ValueError(
+                f"Unsupported image shape: {image.shape}; expected (H, W), "
+                "(1, H, W), (3, H, W), or (H, W, 3)"
+            )
+        return image
+
+    def display_image(image):
+        image = prepare_image(image)
+        if image.ndim == 2:
+            return image
+        return np.clip(image * 255.0, 0, 255).astype(np.uint8)
+
+    if labels is None:
+        n_cols = min(grid_size, len(trajectories))
+        n_rows = int(np.ceil(len(trajectories) / n_cols))
+        slots = [(i // n_cols + 1, i % n_cols + 1, trajectory)
+                 for i, trajectory in enumerate(trajectories)]
+        column_titles = None
+        left_margin = 20
+    else:
+        try:
+            unique_labels = sorted(set(labels))
+        except TypeError:
+            # Permit heterogeneous (but hashable) labels as well.
+            unique_labels = sorted(set(labels), key=lambda label: str(label))
+        grouped = {label: [] for label in unique_labels}
+        for trajectory, label in zip(trajectories, labels):
+            grouped[label].append(trajectory)
+        n_rows = len(unique_labels)
+        n_cols = max(len(grouped[label]) for label in unique_labels)
+        slots = [(row + 1, col + 1, trajectory)
+                 for row, label in enumerate(unique_labels)
+                 for col, trajectory in enumerate(grouped[label])]
+        column_titles = None
+        left_margin = 90
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        subplot_titles=column_titles,
+        horizontal_spacing=0.01,
+        vertical_spacing=0.02,
+    )
+
+    if labels is not None:
+        for row, label in enumerate(unique_labels, start=1):
+            fig.add_annotation(
+                xref="paper",
+                yref="paper",
+                x=-0.02,
+                y=1 - (row - 0.5) / n_rows,
+                text=f"Label {label}",
+                showarrow=False,
+                xanchor="right",
+                font=dict(size=12),
+            )
+
+    def trace_for(image, time_value):
+        image = display_image(image)
+        hovertemplate = f"t={float(time_value):.3f}<extra></extra>"
+        if image.ndim == 3:
+            return go.Image(z=image, hovertemplate=hovertemplate)
+        return go.Heatmap(
+            z=image,
+            colorscale="gray",
+            zmin=0.0,
+            zmax=1.0,
+            showscale=False,
+            hovertemplate=hovertemplate,
+        )
+
+    for row, col, trajectory in slots:
+        time_value, image = trajectory[0]
+        fig.add_trace(trace_for(image, time_value), row=row, col=col)
+        fig.update_xaxes(showticklabels=False, visible=False, row=row, col=col)
+        fig.update_yaxes(showticklabels=False, visible=False, autorange="reversed", row=row, col=col)
+
+    frames = []
+    for step in range(n_steps):
+        time_value = trajectories[0][step][0]
+        frames.append(go.Frame(
+            name=str(step),
+            data=[trace_for(trajectory[step][1], trajectory[step][0])
+                  for _, _, trajectory in slots],
+            traces=list(range(len(slots))),
+            layout=go.Layout(title_text=f"{title} — step {step}/{n_steps - 1}, t={float(time_value):.3f}"),
+        ))
+    fig.frames = frames
+
+    controls = []
+    sliders = []
+    if draw_controls:
+        controls = [dict(
+            type="buttons",
+            direction="left",
+            buttons=[
+                dict(label="Play", method="animate", args=[None, {
+                    "frame": {"duration": frame_duration, "redraw": True},
+                    "transition": {"duration": 0}, "fromcurrent": True,
+                }]),
+                dict(label="Pause", method="animate", args=[[None], {
+                    "frame": {"duration": 0, "redraw": False},
+                    "mode": "immediate", "transition": {"duration": 0},
+                }]),
+            ],
+            x=0.0,
+            y=-0.04,
+        )]
+        sliders = [dict(
+            currentvalue={"prefix": "Step: "},
+            steps=[dict(method="animate", label=str(step), args=[[str(step)], {
+                "mode": "immediate", "frame": {"duration": 0, "redraw": True},
+                "transition": {"duration": 0},
+            }]) for step in range(n_steps)],
+        )]
+
+    fig.update_layout(
+        title=f"{title} — step 0/{n_steps - 1}, t={float(trajectories[0][0][0]):.3f}",
+        width=1100,
+        height=110 * max(10, n_rows),
+        margin=dict(l=left_margin, r=20, t=70, b=80 if draw_controls else 20),
+        updatemenus=controls,
+        sliders=sliders,
+    )
+    return fig
+
+
 def plot_euler_steps_vs_wasserstein_distance(networks, source_data, target_data, min_steps=1, max_steps=50, num_steps=25):
     """Plots the Wasserstein distance between the original target data and the generated data obtained by applying the flow model with different numbers of Euler steps.
     
